@@ -133,7 +133,7 @@ WORKER_SCHEDULE = [
     {"time": "06:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False},
     {"time": "07:30", "name": "register_market_worker", "server": "this", "ollama": False},
     {"time": "07:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False},
-    {"time": "08:00", "name": "market-pipeline",    "server": "this",  "ollama": True},
+    {"time": "08:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False},
     {"time": "09:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False},
     {"time": "12:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False},
     {"time": "12:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False},
@@ -145,7 +145,7 @@ WORKER_SCHEDULE = [
     {"time": "18:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False},
     {"time": "19:30", "name": "register_market_worker", "server": "this", "ollama": False},
     {"time": "19:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False},
-    {"time": "20:00", "name": "market-pipeline",    "server": "this",  "ollama": True},
+    {"time": "20:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False},
     {"time": "21:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False},
 ]
 DB_PATH = Path(os.environ.get('AIXEC_DB', ROOT / 'storage' / 'aixec.sqlite'))
@@ -514,7 +514,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"time": "06:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
                         {"time": "07:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
                         {"time": "07:30", "name": "register_market_worker", "server": "this", "ollama": False, "note": "楽天ランキング未登録商品を登録"},
-                        {"time": "08:00", "name": "market-pipeline",   "server": "this",  "ollama": True,  "hermes": "91de360198b2"},
+                        {"time": "08:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "hermes": "91de360198b2", "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
                         {"time": "09:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへFinReport自動サイクルをenqueue"},
                         {"time": "12:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへPolymarket自動サイクルをenqueue"},
                         {"time": "12:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
@@ -526,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"time": "18:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
                         {"time": "19:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
                         {"time": "19:30", "name": "register_market_worker", "server": "this", "ollama": False, "note": "楽天ランキング未登録商品を登録"},
-                        {"time": "20:00", "name": "market-pipeline",   "server": "this",  "ollama": True,  "hermes": "91de360198b2"},
+                        {"time": "20:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "hermes": "91de360198b2", "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
                         {"time": "21:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへFinReport自動サイクルをenqueue"},
                     ]
                 }
