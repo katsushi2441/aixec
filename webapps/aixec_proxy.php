@@ -28,8 +28,24 @@ curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
 if ($method !== 'GET' && $body !== false) {
     curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
 }
+$headers = array();
 if (!empty($_SERVER['CONTENT_TYPE'])) {
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: ' . $_SERVER['CONTENT_TYPE']));
+    $headers[] = 'Content-Type: ' . $_SERVER['CONTENT_TYPE'];
+}
+$auth_header = '';
+if (!empty($_SERVER['HTTP_AUTHORIZATION'])) {
+    $auth_header = $_SERVER['HTTP_AUTHORIZATION'];
+} elseif (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+    $auth_header = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+}
+if ($auth_header !== '') {
+    $headers[] = 'Authorization: ' . $auth_header;
+}
+if (!empty($_SERVER['HTTP_X_AIXEC_API_TOKEN'])) {
+    $headers[] = 'X-AIXEC-API-TOKEN: ' . $_SERVER['HTTP_X_AIXEC_API_TOKEN'];
+}
+if ($headers) {
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
 }
 
 $response = curl_exec($ch);

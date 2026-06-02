@@ -5,6 +5,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -35,6 +36,73 @@ def _save_worker_status(data):
 
 _worker_status = _load_worker_status()
 
+def _require_bearer(headers, data=None):
+    token = os.environ.get("AIXEC_MARKET_REGISTER_TOKEN") or os.environ.get("AIXEC_API_TOKEN")
+    if not token:
+        return True
+    auth = headers.get("Authorization", "")
+    api_token = headers.get("X-AIXEC-API-TOKEN", "")
+    body_token = ""
+    if isinstance(data, dict):
+        body_token = data.get("api_token") or data.get("token") or ""
+    return auth == "Bearer " + token or api_token == token or body_token == token
+
+def _upsert_market_attr(product_id, name, value):
+    if value is None or value == "":
+        return
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO product_attributes (product_id, attr_name, attr_value, source, created_at, updated_at)
+               VALUES (?, ?, ?, 'market_selection', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT(product_id, attr_name, source)
+               DO UPDATE SET attr_value=excluded.attr_value, updated_at=CURRENT_TIMESTAMP""",
+            (product_id, name, str(value)),
+        )
+        conn.commit()
+
+def _market_item_summary(item, product_id=None, action="planned"):
+    return {
+        "product_id": product_id,
+        "action": action,
+        "name": item.get("name", ""),
+        "item_code": item.get("item_code", ""),
+        "jan": item.get("jan", ""),
+        "price": item.get("price"),
+        "shop_name": item.get("shop_name", ""),
+        "keyword": item.get("keyword", ""),
+        "score": (item.get("_selection") or {}).get("score"),
+        "reason": (item.get("_selection") or {}).get("reason", ""),
+    }
+
+def _insert_register_sns_post(result):
+    if result.get("created", 0) <= 0:
+        return None
+    label = result.get("label") or "AIxEC商品"
+    created = result.get("created", 0)
+    updated = result.get("updated", 0)
+    lines = [
+        "AIxECに新しい市場選定商品を登録しました。",
+        "",
+        f"ジャンル: {label}",
+        f"新規登録: {created}件 / 更新: {updated}件",
+        "",
+        "AIxEC",
+        "https://aixec.exbridge.jp/",
+    ]
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO posts (author, content, created_at, updated_at) VALUES (?, ?, DATETIME('now', 'localtime'), DATETIME('now', 'localtime'))",
+            ("register", "\n".join(lines)),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+def _write_market_result(result):
+    _MARKET_TASK_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(result)
+    payload["saved_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _MARKET_TASK_RESULT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 def _load_market_pipeline_result():
     if not _MARKET_TASK_RESULT_PATH.exists():
         return {}
@@ -43,7 +111,6 @@ def _load_market_pipeline_result():
     data["items_count"] = len(items)
     data["items"] = items[:10]
     try:
-        import datetime
         mtime = _MARKET_TASK_RESULT_PATH.stat().st_mtime
         data["updated_at"] = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
@@ -748,7 +815,6 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     self.send_json({"ok": False, "error": "name required"}, 400)
                     return
-                import datetime
                 record = {
                     "status":   data.get("status", "ok"),
                     "items":    data.get("items", 0),
@@ -759,6 +825,83 @@ class Handler(BaseHTTPRequestHandler):
                     _worker_status[name] = record
                     _save_worker_status(_worker_status)
                 self.send_json({"ok": True})
+                return
+            if path == '/market/register-task':
+                if not _require_bearer(self.headers, data):
+                    self.send_json({"ok": False, "error": "unauthorized"}, 401)
+                    return
+                task = data.get("task") or {}
+                items = data.get("items") or []
+                if not isinstance(task, dict):
+                    self.send_json({"ok": False, "error": "task must be object"}, 400)
+                    return
+                if not isinstance(items, list):
+                    self.send_json({"ok": False, "error": "items must be array"}, 400)
+                    return
+
+                dry_run = bool(data.get("dry_run"))
+                label = (task.get("label") or "AIxEC商品").strip()
+                group = (task.get("group") or "market_products").strip()
+                genre_id = str(task.get("genre_id") or "").strip()
+                category = {"label": label, "group": group, "genre_id": genre_id}
+
+                result_items = []
+                registered = created = updated = skipped = 0
+                if dry_run:
+                    result_items = [_market_item_summary(item) for item in items]
+                else:
+                    from importlib import import_module
+                    market_importer = import_module("scripts.import_rakuten_market_products")
+                    for item in items:
+                        if not isinstance(item, dict):
+                            skipped += 1
+                            continue
+                        product_id, action = market_importer.upsert_product(item, category, upload=False)
+                        if action == "created":
+                            created += 1
+                            registered += 1
+                        elif action == "updated":
+                            updated += 1
+                            registered += 1
+                        else:
+                            skipped += 1
+
+                        selection = item.get("_selection") or {}
+                        if product_id:
+                            _upsert_market_attr(product_id, "market_selection_score", selection.get("score"))
+                            _upsert_market_attr(product_id, "market_selection_reason", selection.get("reason"))
+                            _upsert_market_attr(product_id, "market_selection_source", selection.get("source"))
+                        result_items.append(_market_item_summary(item, product_id, action))
+
+                result = {
+                    "label": label,
+                    "group": group,
+                    "genre_id": genre_id,
+                    "dry_run": dry_run,
+                    "candidates": int((data.get("counts") or {}).get("candidates") or len(items)),
+                    "selected": int((data.get("counts") or {}).get("selected") or len(items)),
+                    "registered": registered,
+                    "created": created,
+                    "updated": updated,
+                    "skipped": skipped,
+                    "items": result_items,
+                    "generated_at": data.get("generated_at") or "",
+                    "received_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                if not dry_run and not data.get("skip_sns"):
+                    result["sns_post_id"] = _insert_register_sns_post(result)
+                _write_market_result(result)
+
+                with _worker_status_lock:
+                    _worker_status["market-register-api"] = {
+                        "status": "ok",
+                        "items": registered if not dry_run else len(items),
+                        "note": f"{label} registered={registered} created={created} updated={updated} dry_run={dry_run}"[:200],
+                        "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    _save_worker_status(_worker_status)
+
+                self.send_json({"ok": True, "result": result})
                 return
             if path == '/posts':
                 content = (data.get('content') or '').strip()
