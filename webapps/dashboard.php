@@ -1,6 +1,98 @@
 <?php
 // Worker & Ollama ダッシュボード
 $api_base = 'https://aixec.exbridge.jp/api.php?path=';
+
+function dash_h($value) {
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
+function dash_fetch_json($path) {
+    global $api_base;
+    $url = $api_base . $path;
+    $context = stream_context_create(array(
+        'http' => array(
+            'timeout' => 8,
+            'header' => "User-Agent: AIxEC-Dashboard/1.0\r\n"
+        )
+    ));
+    $raw = @file_get_contents($url, false, $context);
+    if ($raw === false || $raw === '') {
+        return array();
+    }
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : array();
+}
+
+function dash_badge($status) {
+    $status = (string)$status;
+    $class = $status === 'ok' ? 'ok' : ($status === 'running' || $status === 'queued' ? 'warn' : 'down');
+    return '<span class="badge ' . $class . '">' . dash_h($status ?: '-') . '</span>';
+}
+
+function render_ollama($data) {
+    $servers = isset($data['servers']) && is_array($data['servers']) ? $data['servers'] : array();
+    if (!$servers) return '<div class="status-msg">Ollama情報なし</div>';
+    $html = '<table><thead><tr><th>サーバー</th><th>IP</th><th>状態</th><th>モデル</th></tr></thead><tbody>';
+    foreach ($servers as $s) {
+        $status = isset($s['status']) ? $s['status'] : '';
+        $dot = $status === 'ok' ? 'dot-ok' : 'dot-down';
+        $models = '';
+        if (isset($s['models']) && is_array($s['models'])) {
+            foreach ($s['models'] as $m) $models .= '<span class="model-tag">' . dash_h($m) . '</span>';
+        }
+        $html .= '<tr><td><span class="cell-label">サーバー</span><span class="dot ' . $dot . '"></span><span class="worker-name">' . dash_h(isset($s['name']) ? $s['name'] : '') . '</span></td><td class="url-cell"><span class="cell-label">IP</span>' . dash_h(isset($s['url']) ? $s['url'] : '') . '</td><td><span class="cell-label">状態</span>' . dash_badge($status) . '</td><td><span class="cell-label">モデル</span>' . ($models ?: '-') . '</td></tr>';
+    }
+    return $html . '</tbody></table>';
+}
+
+function render_workers($data) {
+    $workers = isset($data['workers']) && is_array($data['workers']) ? $data['workers'] : array();
+    if (!$workers) return '<div class="status-msg">報告なし</div>';
+    uasort($workers, function($a, $b) {
+        $ta = strtotime(isset($a['reported_at']) ? $a['reported_at'] : '') ?: 0;
+        $tb = strtotime(isset($b['reported_at']) ? $b['reported_at'] : '') ?: 0;
+        return $tb <=> $ta;
+    });
+    $html = '<table><thead><tr><th>Worker</th><th>状態</th><th>件数</th><th>最終実行</th><th>メモ</th></tr></thead><tbody>';
+    foreach ($workers as $name => $w) {
+        $html .= '<tr><td><span class="cell-label">Worker</span><span class="worker-name">' . dash_h($name) . '</span></td><td><span class="cell-label">状態</span>' . dash_badge(isset($w['status']) ? $w['status'] : '') . '</td><td><span class="cell-label">件数</span>' . dash_h(isset($w['items']) ? $w['items'] : '-') . '</td><td><span class="cell-label">最終実行</span>' . dash_h(isset($w['reported_at']) ? $w['reported_at'] : '-') . '</td><td><span class="cell-label">メモ</span>' . dash_h(isset($w['note']) ? $w['note'] : '-') . '</td></tr>';
+    }
+    return $html . '</tbody></table>';
+}
+
+function render_market($data) {
+    $m = isset($data['result']) && is_array($data['result']) ? $data['result'] : array();
+    if (!$m) return '<div class="status-msg">登録結果なし</div>';
+    $run_type = !empty($m['dry_run']) ? '<span class="badge warn">DRY RUN</span> ' : '<span class="badge ok">本登録</span> ';
+    $html = '<div class="muted">' . $run_type . dash_h(isset($m['label']) ? $m['label'] : '-') . ' / ' . dash_h(isset($m['group']) ? $m['group'] : '-') . ' / 最終更新 ' . dash_h(isset($m['updated_at']) ? $m['updated_at'] : '-') . '</div>';
+    $html .= '<div class="metric-grid">';
+    foreach (array('registered' => '登録件数', 'created' => '新規', 'updated' => '更新', 'candidates' => '候補', 'selected' => '選定') as $key => $label) {
+        $html .= '<div class="metric"><b>' . dash_h(isset($m[$key]) ? $m[$key] : 0) . '</b><span>' . dash_h($label) . '</span></div>';
+    }
+    $html .= '</div><div class="item-list">';
+    $items = isset($m['items']) && is_array($m['items']) ? array_slice($m['items'], 0, 6) : array();
+    if ($items) {
+        foreach ($items as $item) $html .= '<div>・' . dash_h(isset($item['name']) ? $item['name'] : '') . '</div>';
+    } else {
+        $html .= '<div class="muted">商品リストなし</div>';
+    }
+    return $html . '</div>';
+}
+
+function render_schedule($data) {
+    $workers = isset($data['schedule']['workers']) && is_array($data['schedule']['workers']) ? $data['schedule']['workers'] : array();
+    if (!$workers) return '<div class="status-msg">スケジュールなし</div>';
+    $html = '<table><thead><tr><th>時刻</th><th>Worker</th><th>Ollama</th><th>サーバー</th><th>内容</th></tr></thead><tbody>';
+    foreach ($workers as $w) {
+        $html .= '<tr><td><span class="cell-label">時刻</span><strong>' . dash_h(isset($w['time']) ? $w['time'] : '') . '</strong></td><td><span class="cell-label">Worker</span><span class="worker-name">' . dash_h(isset($w['name']) ? $w['name'] : '') . '</span></td><td><span class="cell-label">Ollama</span>' . (!empty($w['ollama']) ? '<span class="badge warn">使用</span>' : '<span class="muted">-</span>') . '</td><td><span class="cell-label">サーバー</span>' . dash_h(isset($w['server']) ? $w['server'] : '-') . '</td><td class="muted"><span class="cell-label">内容</span>' . dash_h(isset($w['note']) ? $w['note'] : '') . '</td></tr>';
+    }
+    return $html . '</tbody></table>';
+}
+
+$initial_ollama = dash_fetch_json('ollama/status');
+$initial_workers = dash_fetch_json('worker/status');
+$initial_market = dash_fetch_json('market/pipeline/status');
+$initial_schedule = dash_fetch_json('schedule');
 ?><!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -79,19 +171,19 @@ tr:hover td{background:#fbfdff}
 <div class="grid">
   <div class="card">
     <h2>Ollama サーバー <span class="refresh" id="ollama-updated"></span></h2>
-    <div id="ollama-status">読み込み中...</div>
+    <div id="ollama-status"><?php echo render_ollama($initial_ollama); ?></div>
   </div>
   <div class="card">
     <h2>Worker 最終実行 <span class="refresh" id="worker-updated"></span></h2>
-    <div id="worker-status">読み込み中...</div>
+    <div id="worker-status"><?php echo render_workers($initial_workers); ?></div>
   </div>
   <div class="card full">
     <h2>商品登録パイプライン <span class="refresh" id="market-updated"></span></h2>
-    <div id="market-status">読み込み中...</div>
+    <div id="market-status"><?php echo render_market($initial_market); ?></div>
   </div>
   <div class="card full">
     <h2>本日のスケジュール <span class="refresh" id="schedule-updated"></span></h2>
-    <div id="schedule">読み込み中...</div>
+    <div id="schedule"><?php echo render_schedule($initial_schedule); ?></div>
   </div>
 </div>
 </div>
