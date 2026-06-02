@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import threading
 import datetime
+import glob
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -17,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # Worker status store (JSON永続化)
 _WORKER_STATUS_PATH = ROOT / "storage" / "worker_status.json"
 _MARKET_TASK_RESULT_PATH = ROOT / "tasks" / "market_task_result.json"
+_HORIZON_LOCK_PATH = Path("/tmp/horizon_worker_api.pid")
+_HORIZON_LOG_PATH = Path("/tmp/horizon_worker.log")
 _worker_status_lock = threading.Lock()
 
 def _load_worker_status():
@@ -102,6 +105,56 @@ def _write_market_result(result):
     payload = dict(result)
     payload["saved_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _MARKET_TASK_RESULT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+def _horizon_running():
+    if _HORIZON_LOCK_PATH.exists():
+        pid = _HORIZON_LOCK_PATH.read_text(encoding="utf-8").strip()
+        if pid and _pid_alive(pid):
+            return int(pid)
+    return 0
+
+def _find_ssh_agent_sock():
+    current = os.environ.get("SSH_AUTH_SOCK", "")
+    if current:
+        return current
+    for sock in glob.glob("/tmp/ssh-*/agent.*"):
+        result = subprocess.run(["ssh-add", "-l"], env={**os.environ, "SSH_AUTH_SOCK": sock}, capture_output=True)
+        if result.returncode == 0:
+            return sock
+    return ""
+
+def _start_horizon_worker():
+    running = _horizon_running()
+    if running:
+        return {"started": False, "already_running": True, "pid": running}
+    horizon_dir = Path("/home/kojima/exdirect/horizon")
+    worker = horizon_dir / "horizon_worker.py"
+    if not worker.exists():
+        raise FileNotFoundError(str(worker))
+    env = dict(os.environ)
+    env.setdefault("OLLAMA_API_KEY", "ollama")
+    ssh_sock = _find_ssh_agent_sock()
+    if ssh_sock:
+        env["SSH_AUTH_SOCK"] = ssh_sock
+    _HORIZON_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = _HORIZON_LOG_PATH.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        ["python3", str(worker)],
+        cwd=str(horizon_dir),
+        env=env,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    _HORIZON_LOCK_PATH.write_text(str(proc.pid), encoding="utf-8")
+    return {"started": True, "already_running": False, "pid": proc.pid, "ssh_agent": bool(ssh_sock)}
 
 def _load_market_pipeline_result():
     if not _MARKET_TASK_RESULT_PATH.exists():
@@ -901,6 +954,34 @@ class Handler(BaseHTTPRequestHandler):
                     }
                     _save_worker_status(_worker_status)
 
+                self.send_json({"ok": True, "result": result})
+                return
+            if path == '/horizon/run-worker':
+                if not _require_bearer(self.headers, data):
+                    self.send_json({"ok": False, "error": "unauthorized"}, 401)
+                    return
+                dry_run = bool(data.get("dry_run"))
+                running_pid = _horizon_running()
+                if dry_run:
+                    self.send_json({
+                        "ok": True,
+                        "result": {
+                            "dry_run": True,
+                            "running": bool(running_pid),
+                            "pid": running_pid,
+                            "command": "cd /home/kojima/exdirect/horizon && OLLAMA_API_KEY=ollama python3 horizon_worker.py",
+                        },
+                    })
+                    return
+                result = _start_horizon_worker()
+                with _worker_status_lock:
+                    _worker_status["horizon-worker-trigger"] = {
+                        "status": "ok",
+                        "items": 1 if result.get("started") else 0,
+                        "note": f"triggered started={result.get('started')} pid={result.get('pid')}"[:200],
+                        "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    _save_worker_status(_worker_status)
                 self.send_json({"ok": True, "result": result})
                 return
             if path == '/posts':
