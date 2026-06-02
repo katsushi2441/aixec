@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import threading
 import datetime
 import glob
@@ -14,6 +15,8 @@ from urllib.parse import parse_qs, urlencode, urlparse, unquote
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # Worker status store (JSON永続化)
 _WORKER_STATUS_PATH = ROOT / "storage" / "worker_status.json"
@@ -943,16 +946,18 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 if not dry_run and not data.get("skip_sns"):
                     result["sns_post_id"] = _insert_register_sns_post(result)
-                _write_market_result(result)
+                if not dry_run:
+                    _write_market_result(result)
 
-                with _worker_status_lock:
-                    _worker_status["market-register-api"] = {
-                        "status": "ok",
-                        "items": registered if not dry_run else len(items),
-                        "note": f"{label} registered={registered} created={created} updated={updated} dry_run={dry_run}"[:200],
-                        "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                    _save_worker_status(_worker_status)
+                if not dry_run:
+                    with _worker_status_lock:
+                        _worker_status["market-register-api"] = {
+                            "status": "ok",
+                            "items": registered,
+                            "note": f"{label} registered={registered} created={created} updated={updated}"[:200],
+                            "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                        _save_worker_status(_worker_status)
 
                 self.send_json({"ok": True, "result": result})
                 return
