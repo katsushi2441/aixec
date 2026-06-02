@@ -1,0 +1,225 @@
+<?php
+// Worker & Ollama ダッシュボード
+$api_base = 'https://aixec.exbridge.jp/api.php?path=';
+?><!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AIxEC Worker Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans JP',sans-serif;background:#f6f8fb;color:#172033;padding:18px;line-height:1.55}
+.shell{max-width:1180px;margin:0 auto}
+.top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px}
+h1{font-size:24px;font-weight:900;color:#172033;letter-spacing:0}
+h1 span{display:block;font-size:12px;font-weight:700;color:#6b7280;margin-top:3px}
+h2{font-size:14px;font-weight:900;color:#334155;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-bottom:20px}
+.card{background:#fff;border:1px solid #e5eaf0;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+.full{grid-column:1/-1}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+th{text-align:left;padding:9px 10px;color:#64748b;font-weight:800;border-bottom:1px solid #e5eaf0;background:#f8fafc}
+td{padding:10px;border-bottom:1px solid #eef2f6;vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr:hover td{background:#fbfdff}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}
+.ok{background:#dcfce7;color:#166534}
+.down{background:#fee2e2;color:#991b1b}
+.warn{background:#fef3c7;color:#92400e}
+.now-row td{background:#eff6ff!important;border-top:1px solid #bfdbfe;border-bottom:1px solid #bfdbfe}
+.now-row td:first-child{border-left:4px solid #2563eb}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.dot-ok{background:#22c55e}
+.dot-down{background:#ef4444}
+.dot-warn{background:#f59e0b}
+.refresh{font-size:12px;color:#94a3b8;font-weight:700;white-space:nowrap}
+.clock-card{text-align:right}
+#clock{font-size:30px;font-weight:900;color:#2563eb;line-height:1}
+#date{font-size:13px;color:#64748b;margin-top:5px}
+.model-tag{background:#eef6ff;color:#1d4ed8;border:1px solid #dbeafe;padding:2px 7px;border-radius:999px;font-size:11px;margin:2px;display:inline-block}
+.metric-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:8px 0 12px}
+.metric{background:#f8fafc;border:1px solid #e5eaf0;border-radius:10px;padding:12px}
+.metric b{display:block;color:#2563eb;font-size:22px;line-height:1.1}
+.metric span{display:block;color:#64748b;font-size:11px;margin-top:4px;font-weight:700}
+.muted{color:#64748b;font-size:12px}
+.item-list{margin-top:10px;border-top:1px solid #e5eaf0;padding-top:8px}
+.item-list div{font-size:12px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:4px 0}
+.status-msg{color:#64748b;font-size:13px;background:#f8fafc;border:1px solid #e5eaf0;border-radius:10px;padding:12px}
+.cell-label{display:none}
+.worker-name{font-weight:800;color:#0f172a}
+.url-cell{font-size:11px;color:#64748b;word-break:break-all}
+@media(max-width:760px){
+  body{padding:12px;background:#fff}
+  .top{align-items:flex-start;margin-bottom:12px}
+  h1{font-size:20px}
+  .clock-card{display:none}
+  .grid{grid-template-columns:1fr;gap:12px}
+  .card{border-radius:12px;padding:14px;box-shadow:none}
+  .metric-grid{grid-template-columns:repeat(2,1fr)}
+  table,thead,tbody,tr,td{display:block;width:100%}
+  thead{display:none}
+  tr{border:1px solid #e5eaf0;border-radius:12px;margin:8px 0;padding:9px 10px;background:#fff}
+  td{border:0;padding:5px 0}
+  tr:hover td{background:transparent}
+  .now-row{background:#eff6ff;border-color:#bfdbfe}
+  .now-row td{background:transparent!important;border:0}
+  .now-row td:first-child{border-left:0}
+  .cell-label{display:inline-block;min-width:74px;color:#94a3b8;font-size:11px;font-weight:800}
+  .item-list div{white-space:normal}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+<div class="top">
+  <h1>AIxEC Worker Dashboard<span>商品登録・記事生成・Ollama稼働状況</span></h1>
+  <div class="clock-card"><div id="clock"></div><div id="date"></div></div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>Ollama サーバー <span class="refresh" id="ollama-updated"></span></h2>
+    <div id="ollama-status">読み込み中...</div>
+  </div>
+  <div class="card">
+    <h2>Worker 最終実行 <span class="refresh" id="worker-updated"></span></h2>
+    <div id="worker-status">読み込み中...</div>
+  </div>
+  <div class="card full">
+    <h2>商品登録パイプライン <span class="refresh" id="market-updated"></span></h2>
+    <div id="market-status">読み込み中...</div>
+  </div>
+  <div class="card full">
+    <h2>本日のスケジュール <span class="refresh" id="schedule-updated"></span></h2>
+    <div id="schedule">読み込み中...</div>
+  </div>
+</div>
+</div>
+<script>
+const API = 'https://aixec.exbridge.jp/api.php?path=';
+
+function fmt(s){return s||'-'}
+function esc(s){
+  return String(s ?? '').replace(/[&<>"']/g, m => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[m]));
+}
+function now_hhmm(){
+  const d=new Date();
+  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+function updateClock(){
+  const d=new Date();
+  document.getElementById('clock').textContent=
+    String(d.getHours()).padStart(2,'0')+':'+
+    String(d.getMinutes()).padStart(2,'0')+':'+
+    String(d.getSeconds()).padStart(2,'0');
+  document.getElementById('date').textContent=
+    d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate()+'（'+['日','月','火','水','木','金','土'][d.getDay()]+'）';
+}
+setInterval(updateClock,1000);updateClock();
+
+async function loadOllama(){
+  try{
+    const r=await fetch(API+'ollama/status');
+    const d=await r.json();
+    const servers=d.servers||[];
+    let html='<table><thead><tr><th>サーバー</th><th>IP</th><th>状態</th><th>モデル</th></tr></thead><tbody>';
+    for(const s of servers){
+      const ok=s.status==='ok';
+      const dot=ok?'dot-ok':'dot-down';
+      const badge=ok?'ok':'down';
+      const models=(s.models||[]).map(m=>`<span class="model-tag">${m}</span>`).join('')||'-';
+      html+=`<tr><td><span class="cell-label">サーバー</span><span class="dot ${dot}"></span><span class="worker-name">${esc(s.name)}</span></td><td class="url-cell"><span class="cell-label">IP</span>${esc(s.url)}</td><td><span class="cell-label">状態</span><span class="badge ${badge}">${esc(s.status)}</span></td><td><span class="cell-label">モデル</span>${models}</td></tr>`;
+    }
+    html+='</tbody></table>';
+    document.getElementById('ollama-status').innerHTML=html;
+    document.getElementById('ollama-updated').textContent='更新: '+now_hhmm();
+  }catch(e){document.getElementById('ollama-status').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';}
+}
+
+async function loadWorkerStatus(){
+  try{
+    const r=await fetch(API+'worker/status');
+    const d=await r.json();
+    const ws=d.workers||{};
+    const keys=Object.keys(ws);
+    if(!keys.length){document.getElementById('worker-status').innerHTML='<div class="status-msg">報告なし</div>';return;}
+    let html='<table><thead><tr><th>Worker</th><th>状態</th><th>件数</th><th>最終実行</th><th>メモ</th></tr></thead><tbody>';
+    const sortedKeys=keys.sort((a,b)=>{
+      const ta=Date.parse((ws[a]&&ws[a].reported_at)||'')||0;
+      const tb=Date.parse((ws[b]&&ws[b].reported_at)||'')||0;
+      if(tb!==ta) return tb-ta;
+      return a.localeCompare(b);
+    });
+    for(const name of sortedKeys){
+      const w=ws[name];
+      const badge=w.status==='ok'?'ok':(w.status==='running'?'warn':'down');
+      html+=`<tr><td><span class="cell-label">Worker</span><span class="worker-name">${esc(name)}</span></td><td><span class="cell-label">状態</span><span class="badge ${badge}">${esc(w.status)}</span></td><td><span class="cell-label">件数</span>${esc(w.items??'-')}</td><td><span class="cell-label">最終実行</span>${esc(fmt(w.reported_at))}</td><td><span class="cell-label">メモ</span>${esc(fmt(w.note))}</td></tr>`;
+    }
+    html+='</tbody></table>';
+    document.getElementById('worker-status').innerHTML=html;
+    document.getElementById('worker-updated').textContent='更新: '+now_hhmm();
+  }catch(e){document.getElementById('worker-status').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';}
+}
+
+async function loadMarketPipeline(){
+  try{
+    const r=await fetch(API+'market/pipeline/status');
+    const d=await r.json();
+    const m=d.result||{};
+    if(!Object.keys(m).length){
+      document.getElementById('market-status').innerHTML='<div class="status-msg">登録結果なし</div>';
+      return;
+    }
+    const items=m.items||[];
+    const names=items.slice(0,6).map(x=>`<div>・${esc(x.name||'')}</div>`).join('');
+    const runType=m.dry_run ? '<span class="badge warn">DRY RUN</span> ' : '<span class="badge ok">本登録</span> ';
+    const html=`
+      <div class="muted">${runType}${esc(m.label||'-')} / ${esc(m.group||'-')} / 最終更新 ${esc(m.updated_at||'-')}</div>
+      <div class="metric-grid">
+        <div class="metric"><b>${esc(m.registered??0)}</b><span>登録件数</span></div>
+        <div class="metric"><b>${esc(m.created??0)}</b><span>新規</span></div>
+        <div class="metric"><b>${esc(m.updated??0)}</b><span>更新</span></div>
+        <div class="metric"><b>${esc(m.candidates??0)}</b><span>候補</span></div>
+        <div class="metric"><b>${esc(m.selected??0)}</b><span>選定</span></div>
+      </div>
+      <div class="item-list">${names || '<div class="muted">商品リストなし</div>'}</div>
+    `;
+    document.getElementById('market-status').innerHTML=html;
+    document.getElementById('market-updated').textContent='更新: '+now_hhmm();
+  }catch(e){
+    document.getElementById('market-status').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';
+  }
+}
+
+async function loadSchedule(){
+  try{
+    const r=await fetch(API+'schedule');
+    const d=await r.json();
+    const workers=d.schedule?.workers||[];
+    const cur=now_hhmm();
+    let html='<table><thead><tr><th>時刻</th><th>Worker</th><th>Ollama</th><th>サーバー</th><th>内容</th></tr></thead><tbody>';
+    for(const w of workers){
+      const isNow=cur>=w.time&&(workers[workers.indexOf(w)+1]?cur<workers[workers.indexOf(w)+1].time:true);
+      const rowCls=isNow?' class="now-row"':'';
+      const ollama=w.ollama?'<span class="badge warn">使用</span>':'<span class="muted">-</span>';
+      const srv=w.server==='this'?'<span class="badge ok">this</span>':'<span class="badge warn">other</span>';
+      html+=`<tr${rowCls}><td><span class="cell-label">時刻</span><strong>${esc(w.time)}</strong></td><td><span class="cell-label">Worker</span><span class="worker-name">${esc(w.name)}</span></td><td><span class="cell-label">Ollama</span>${ollama}</td><td><span class="cell-label">サーバー</span>${srv}</td><td class="muted"><span class="cell-label">内容</span>${esc(w.note||'')}</td></tr>`;
+    }
+    html+='</tbody></table>';
+    document.getElementById('schedule').innerHTML=html;
+    document.getElementById('schedule-updated').textContent='更新: '+now_hhmm();
+  }catch(e){document.getElementById('schedule').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';}
+}
+
+function loadAll(){loadOllama();loadWorkerStatus();loadMarketPipeline();loadSchedule();}
+loadAll();
+setInterval(loadOllama,30000);
+setInterval(loadWorkerStatus,15000);
+setInterval(loadMarketPipeline,15000);
+setInterval(loadSchedule,60000);
+</script>
+</body>
+</html>

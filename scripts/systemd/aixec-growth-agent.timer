@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AIxEC Growth Agent every 24 hours
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=24h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

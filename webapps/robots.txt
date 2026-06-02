@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /go.php
+Sitemap: https://aixec.exbridge.jp/sitemap.php
+Sitemap: https://aixec.exbridge.jp/video-sitemap.php

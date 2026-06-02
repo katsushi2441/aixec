@@ -1,0 +1,7 @@
+AddHandler php8.2-script .php
+DirectoryIndex index.php index.html
+
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]

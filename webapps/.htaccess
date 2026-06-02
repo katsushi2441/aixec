@@ -1,0 +1,6 @@
+AddHandler php8.2-script .php
+DirectoryIndex index.php index.html
+
+RewriteEngine On
+RewriteRule ^aixtube/([^/]+)$ aixtube.php?v=$1 [L,QSA,B]
+RewriteRule ^product/(.+)$ product.php?slug=$1 [L,QSA]

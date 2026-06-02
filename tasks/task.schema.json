@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "group",
+    "target_count",
+    "genre_id",
+    "keywords",
+    "exclude_keywords",
+    "description_policy",
+    "reason",
+    "next_actions"
+  ],
+  "properties": {
+    "label": {"type": "string"},
+    "group": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "target_count": {"type": "integer", "minimum": 1, "maximum": 1000},
+    "genre_id": {"type": "string"},
+    "keywords": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 40,
+      "items": {"type": "string"}
+    },
+    "exclude_keywords": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "description_policy": {"type": "string"},
+    "reason": {"type": "string"},
+    "next_actions": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}
+

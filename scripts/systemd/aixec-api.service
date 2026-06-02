@@ -1,0 +1,16 @@
+[Unit]
+Description=AIxEC API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kojima/exdirect/aixec
+Environment=AIXEC_DB=storage/aixec.sqlite
+Environment=AIXEC_PORT=8081
+ExecStart=/home/kojima/exdirect/aixec/scripts/run_api.sh
+Restart=always
+RestartSec=3
+User=kojima
+
+[Install]
+WantedBy=multi-user.target

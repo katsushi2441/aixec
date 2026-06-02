@@ -1,0 +1,35 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local environment / secrets
+.env
+*.env
+webapps/x_api_keys.sh
+x_api_keys.sh
+
+# Runtime storage
+storage/
+!storage/.gitkeep
+
+# Generated task outputs
+tasks/*
+!tasks/.gitkeep
+!tasks/*.schema.json
+!tasks/growth_memory.md
+
+# Logs and generated feeds
+*.log
+*.pid
+webapps/google_products.xml
+webapps/sitemaps/
+webapps/data/
+webapps/images/products/
+
+# Large/local import data
+data/
+heteml/
+
+# Local tooling
+.venv/
+venv/

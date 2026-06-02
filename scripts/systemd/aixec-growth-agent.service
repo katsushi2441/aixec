@@ -1,0 +1,11 @@
+[Unit]
+Description=AIxEC Growth Agent observe-plan-act loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/kojima/exdirect/aixec
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/kojima/exdirect/aixec/scripts/hermes_growth_agent.sh
+
