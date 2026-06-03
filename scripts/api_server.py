@@ -27,6 +27,7 @@ _GROWTH_LOCK_PATH = ROOT / "storage" / "growth_agent.lock"
 _GROWTH_LOG_PATH = ROOT / "storage" / "autonomous" / "growth_agent.log"
 _REGISTER_MARKET_PID_PATH = ROOT / "storage" / "register_market_worker.pid"
 _REGISTER_MARKET_LOG_PATH = ROOT / "storage" / "register_market_worker.log"
+_HERMES_JOBS_PATH = Path("/home/kojima/.hermes/cron/jobs.json")
 _worker_status_lock = threading.Lock()
 _response_cache_lock = threading.Lock()
 _response_cache = {}
@@ -41,6 +42,78 @@ ALLOWED_WORKER_NAMES = {
     "aixec-register-market-worker-enqueue",
     "aixec-growth-agent-enqueue",
 }
+
+SCHEDULE_NOTES = {
+    "url2ai-polymarket-enqueue": "RQDB4AI APIへPolymarket自動サイクルをenqueue",
+    "url2ai-oss-enqueue": "RQDB4AI APIへOSS自動サイクルをenqueue",
+    "url2ai-finreport-enqueue": "RQDB4AI APIへFinReport自動サイクルをenqueue",
+    "buzblogger-enqueue": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue",
+    "horizon-worker-enqueue": "RQDB4AI APIへHorizon worker起動ジョブをenqueue",
+    "aixec-market-pipeline-enqueue": "RQDB4AI APIへAIxEC market pipelineをenqueue",
+    "aixec-register-market-worker-enqueue": "RQDB4AI APIへregister_market_workerをenqueue",
+    "aixec-growth-agent-enqueue": "RQDB4AI APIへgrowth_agentをenqueue",
+}
+
+def _cron_values(field, min_value, max_value):
+    values = set()
+    for part in str(field).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part == "*":
+            values.update(range(min_value, max_value + 1))
+        elif part.startswith("*/"):
+            step = int(part[2:])
+            values.update(range(min_value, max_value + 1, step))
+        elif "-" in part:
+            start, end = [int(x) for x in part.split("-", 1)]
+            values.update(range(max(min_value, start), min(max_value, end) + 1))
+        else:
+            values.add(int(part))
+    return sorted(v for v in values if min_value <= v <= max_value)
+
+def _load_schedule_from_hermes():
+    workers = []
+    if not _HERMES_JOBS_PATH.exists():
+        return None
+    try:
+        data = json.loads(_HERMES_JOBS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for job in data.get("jobs", []):
+        name = job.get("name") or ""
+        if name not in ALLOWED_WORKER_NAMES or not job.get("enabled", True):
+            continue
+        expr = ((job.get("schedule") or {}).get("expr") or job.get("schedule_display") or "").strip()
+        parts = expr.split()
+        if len(parts) < 2:
+            continue
+        try:
+            minutes = _cron_values(parts[0], 0, 59)
+            hours = _cron_values(parts[1], 0, 23)
+        except Exception:
+            continue
+        for hour in hours:
+            for minute in minutes:
+                workers.append({
+                    "time": f"{hour:02d}:{minute:02d}",
+                    "name": name,
+                    "server": "this",
+                    "ollama": False,
+                    "hermes": job.get("id"),
+                    "cron": expr,
+                    "next_run_at": job.get("next_run_at"),
+                    "last_run_at": job.get("last_run_at"),
+                    "last_status": job.get("last_status"),
+                    "note": SCHEDULE_NOTES.get(name, "RQDB4AI APIへenqueue"),
+                })
+    workers.sort(key=lambda x: (x["time"], x["name"]))
+    return {
+        "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": str(_HERMES_JOBS_PATH),
+        "note": "Hermes jobs.jsonから生成",
+        "workers": workers,
+    }
 
 def _cache_get(key, ttl=30):
     now = datetime.datetime.now().timestamp()
@@ -776,34 +849,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "servers": results})
                 return
             if path == '/schedule':
-                schedule = {
-                    "updated": "2026-05-24",
-                    "note": "Ollama使用workerは競合しないよう1時間以上あけて配置",
-                    "workers": [
-                        {"time": "00:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへPolymarket自動サイクルをenqueue"},
-                        {"time": "00:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
-                        {"time": "01:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
-                        {"time": "01:30", "name": "aixec-register-market-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへregister_market_workerをenqueue"},
-                        {"time": "03:00", "name": "aixec-growth-agent-enqueue", "server": "this", "ollama": False, "hermes": "2fc0d9ebb81f", "note": "RQDB4AI APIへgrowth_agentをenqueue"},
-                        {"time": "06:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへPolymarket自動サイクルをenqueue"},
-                        {"time": "06:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
-                        {"time": "07:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
-                        {"time": "07:30", "name": "aixec-register-market-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへregister_market_workerをenqueue"},
-                        {"time": "08:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
-                        {"time": "09:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへFinReport自動サイクルをenqueue"},
-                        {"time": "12:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへPolymarket自動サイクルをenqueue"},
-                        {"time": "12:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
-                        {"time": "13:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
-                        {"time": "13:30", "name": "aixec-register-market-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへregister_market_workerをenqueue"},
-                        {"time": "15:00", "name": "aixec-growth-agent-enqueue", "server": "this", "ollama": False, "hermes": "2fc0d9ebb81f", "note": "RQDB4AI APIへgrowth_agentをenqueue"},
-                        {"time": "16:30", "name": "horizon-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへHorizon worker起動ジョブをenqueue"},
-                        {"time": "18:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへPolymarket自動サイクルをenqueue"},
-                        {"time": "18:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
-                        {"time": "19:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
-                        {"time": "19:30", "name": "aixec-register-market-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへregister_market_workerをenqueue"},
-                        {"time": "20:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
-                        {"time": "21:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへFinReport自動サイクルをenqueue"},
-                    ]
+                schedule = _load_schedule_from_hermes() or {
+                    "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "source": "fallback",
+                    "note": "Hermes jobs.jsonを読めませんでした",
+                    "workers": [],
                 }
                 self.send_json({"ok": True, "schedule": schedule})
                 return

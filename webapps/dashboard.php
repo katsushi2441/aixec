@@ -79,9 +79,12 @@ function render_schedule($data) {
         return isset($w['name']) && isset($allowed_workers[$w['name']]);
     }));
     if (!$workers) return '<div class="status-msg">スケジュールなし</div>';
-    $html = '<table><thead><tr><th>時刻</th><th>Worker</th><th>Ollama</th><th>サーバー</th><th>内容</th></tr></thead><tbody>';
+    $html = '<table><thead><tr><th>時刻</th><th>Worker</th><th>Hermes</th><th>前回実行</th><th>内容</th></tr></thead><tbody>';
     foreach ($workers as $w) {
-        $html .= '<tr><td><span class="cell-label">時刻</span><strong>' . dash_h(isset($w['time']) ? $w['time'] : '') . '</strong></td><td><span class="cell-label">Worker</span><span class="worker-name">' . dash_h(isset($w['name']) ? $w['name'] : '') . '</span></td><td><span class="cell-label">Ollama</span>' . (!empty($w['ollama']) ? '<span class="badge warn">使用</span>' : '<span class="muted">-</span>') . '</td><td><span class="cell-label">サーバー</span>' . dash_h(isset($w['server']) ? $w['server'] : '-') . '</td><td class="muted"><span class="cell-label">内容</span>' . dash_h(isset($w['note']) ? $w['note'] : '') . '</td></tr>';
+        $last_status = isset($w['last_status']) ? $w['last_status'] : '-';
+        $last_class = $last_status === 'ok' ? 'ok' : ($last_status === 'error' ? 'down' : 'warn');
+        $last_run = isset($w['last_run_at']) ? preg_replace('/T/', ' ', substr($w['last_run_at'], 0, 16)) : '-';
+        $html .= '<tr><td><span class="cell-label">時刻</span><strong>' . dash_h(isset($w['time']) ? $w['time'] : '') . '</strong></td><td><span class="cell-label">Worker</span><span class="worker-name">' . dash_h(isset($w['name']) ? $w['name'] : '') . '</span></td><td><span class="cell-label">Hermes</span><span class="badge ' . $last_class . '">' . dash_h($last_status) . '</span></td><td><span class="cell-label">前回実行</span>' . dash_h($last_run) . '</td><td class="muted"><span class="cell-label">内容</span>' . dash_h(isset($w['note']) ? $w['note'] : '') . '</td></tr>';
     }
     return $html . '</tbody></table>';
 }
@@ -264,13 +267,14 @@ async function loadSchedule(){
     const d=await r.json();
     const workers=(d.schedule?.workers||[]).filter(w => ALLOWED_WORKERS.has(w.name));
     const cur=now_hhmm();
-    let html='<table><thead><tr><th>時刻</th><th>Worker</th><th>Ollama</th><th>サーバー</th><th>内容</th></tr></thead><tbody>';
+    let html='<table><thead><tr><th>時刻</th><th>Worker</th><th>Hermes</th><th>前回実行</th><th>内容</th></tr></thead><tbody>';
     for(const w of workers){
       const isNow=cur>=w.time&&(workers[workers.indexOf(w)+1]?cur<workers[workers.indexOf(w)+1].time:true);
       const rowCls=isNow?' class="now-row"':'';
-      const ollama=w.ollama?'<span class="badge warn">使用</span>':'<span class="muted">-</span>';
-      const srv=w.server==='this'?'<span class="badge ok">this</span>':'<span class="badge warn">other</span>';
-      html+=`<tr${rowCls}><td><span class="cell-label">時刻</span><strong>${esc(w.time)}</strong></td><td><span class="cell-label">Worker</span><span class="worker-name">${esc(w.name)}</span></td><td><span class="cell-label">Ollama</span>${ollama}</td><td><span class="cell-label">サーバー</span>${srv}</td><td class="muted"><span class="cell-label">内容</span>${esc(w.note||'')}</td></tr>`;
+      const hs=w.last_status||'-';
+      const hcls=hs==='ok'?'ok':(hs==='error'?'down':'warn');
+      const last=(w.last_run_at||'-').replace('T',' ').slice(0,16);
+      html+=`<tr${rowCls}><td><span class="cell-label">時刻</span><strong>${esc(w.time)}</strong></td><td><span class="cell-label">Worker</span><span class="worker-name">${esc(w.name)}</span></td><td><span class="cell-label">Hermes</span><span class="badge ${hcls}">${esc(hs)}</span></td><td><span class="cell-label">前回実行</span>${esc(last)}</td><td class="muted"><span class="cell-label">内容</span>${esc(w.note||'')}</td></tr>`;
     }
     html+='</tbody></table>';
     document.getElementById('schedule').innerHTML=html;
