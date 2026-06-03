@@ -24,6 +24,9 @@ _MARKET_TASK_RESULT_PATH = ROOT / "tasks" / "market_task_result.json"
 _HORIZON_LOCK_PATH = Path("/tmp/horizon_worker_api.pid")
 _HORIZON_LOG_PATH = Path("/tmp/horizon_worker.log")
 _worker_status_lock = threading.Lock()
+_response_cache_lock = threading.Lock()
+_response_cache = {}
+_RESPONSE_CACHE_MAX = 512
 ALLOWED_WORKER_NAMES = {
     "url2ai-polymarket-enqueue",
     "url2ai-oss-enqueue",
@@ -34,6 +37,26 @@ ALLOWED_WORKER_NAMES = {
     "aixec-register-market-worker-enqueue",
     "aixec-growth-agent-enqueue",
 }
+
+def _cache_get(key, ttl=30):
+    now = datetime.datetime.now().timestamp()
+    with _response_cache_lock:
+        hit = _response_cache.get(key)
+        if not hit:
+            return None
+        expires, value = hit
+        if expires < now:
+            _response_cache.pop(key, None)
+            return None
+        return value
+
+def _cache_set(key, value, ttl=30):
+    now = datetime.datetime.now().timestamp()
+    with _response_cache_lock:
+        if len(_response_cache) >= _RESPONSE_CACHE_MAX:
+            for old_key in list(_response_cache.keys())[:128]:
+                _response_cache.pop(old_key, None)
+        _response_cache[key] = (now + ttl, value)
 
 def _load_worker_status():
     try:
@@ -259,6 +282,10 @@ def migrate():
         conn.execute("UPDATE posts SET author = 'AIxTubeG' WHERE lower(author) = 'aixtubeg'")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created_at_id ON posts(created_at DESC, id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author_created_at_id ON posts(author, created_at DESC, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_products_jan ON products(jan)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_products_model_number ON products(model_number)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_products_internal_sku ON products(internal_sku)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_products_asin ON products(asin)")
         conn.commit()
 
 
@@ -521,15 +548,22 @@ class Handler(BaseHTTPRequestHandler):
     server_version = 'AIxEC/0.2'
 
     def log_message(self, fmt, *args):
+        request_line = args[0] if args else ''
+        if isinstance(request_line, str) and request_line.startswith('GET /products'):
+            return
         print('%s - %s' % (self.address_string(), fmt % args))
 
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return False
+        return True
 
     def read_json(self):
         length = int(self.headers.get('Content-Length') or 0)
@@ -620,6 +654,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': True, 'keyword': keyword, 'result': result})
                 return
             if path == '/products':
+                cache_key = self.path
+                cached = _cache_get(cache_key, ttl=20)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
                 limit = min(200, max(1, int(qs.get('limit', ['50'])[0])))
                 offset = max(0, int(qs.get('offset', ['0'])[0]))
                 query = (qs.get('q', [''])[0] or '').strip()
@@ -627,9 +666,14 @@ class Handler(BaseHTTPRequestHandler):
                 isbns_raw = qs.get('isbns', [''])[0]
                 where, params = [], []
                 if query:
-                    like = '%' + query + '%'
-                    where.append('(name LIKE ? OR maker LIKE ? OR model_number LIKE ? OR jan LIKE ? OR asin LIKE ? OR internal_sku LIKE ?)')
-                    params.extend([like, like, like, like, like, like])
+                    compact_query = re.sub(r'\D', '', query)
+                    if compact_query and compact_query == query and len(compact_query) >= 8:
+                        where.append('(jan = ? OR model_number = ? OR asin = ? OR internal_sku = ?)')
+                        params.extend([query, query, query, query])
+                    else:
+                        like = '%' + query + '%'
+                        where.append('(name LIKE ? OR maker LIKE ? OR model_number LIKE ? OR jan LIKE ? OR asin LIKE ? OR internal_sku LIKE ?)')
+                        params.extend([like, like, like, like, like, like])
                 if has_description:
                     where.append("EXISTS (SELECT 1 FROM product_attributes WHERE product_id=products.id AND attr_name='book_description_source' AND attr_value != 'basic')")
                 if isbns_raw:
@@ -671,7 +715,10 @@ class Handler(BaseHTTPRequestHandler):
                 params.extend([limit, offset])
                 with connect() as conn:
                     rows = conn.execute(sql, params).fetchall()
-                self.send_json({'ok': True, 'items': attach_image_urls(conn, rows)})
+                    items = attach_image_urls(conn, rows)
+                payload = {'ok': True, 'items': items}
+                _cache_set(cache_key, payload, ttl=20)
+                self.send_json(payload)
                 return
             if path == '/lp/generate':
                 product_id = qs.get('id', [''])[0].strip()
@@ -862,13 +909,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': True, 'item': row_dict(row)})
                 return
             if path.startswith('/products/'):
+                cache_key = self.path
+                cached = _cache_get(cache_key, ttl=60)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
                 product_key = unquote(path.split('/', 2)[2])
                 with connect() as conn:
                     row = self.find_product(conn, product_key)
-                if not row:
-                    self.send_json({'ok': False, 'error': 'product not found'}, 404)
-                    return
-                self.send_json({'ok': True, 'item': attach_image_urls(conn, row)})
+                    if not row:
+                        self.send_json({'ok': False, 'error': 'product not found'}, 404)
+                        return
+                    item = attach_image_urls(conn, row)
+                payload = {'ok': True, 'item': item}
+                _cache_set(cache_key, payload, ttl=60)
+                self.send_json(payload)
                 return
             self.send_json({'ok': False, 'error': 'not found'}, 404)
         except Exception as exc:
@@ -1255,6 +1310,7 @@ def main():
     host = os.environ.get('AIXEC_HOST', '0.0.0.0')
     port = int(os.environ.get('AIXEC_PORT', '8022'))
     httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd.daemon_threads = True
     print('AIxEC API listening on http://%s:%s' % (host, port), flush=True)
     httpd.serve_forever()
 
