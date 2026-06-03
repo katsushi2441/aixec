@@ -1078,7 +1078,7 @@ class Handler(BaseHTTPRequestHandler):
                     "status":   data.get("status", "ok"),
                     "items":    data.get("items", 0),
                     "note":     data.get("note", ""),
-                    "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "reported_at": data.get("reported_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 with _worker_status_lock:
                     _worker_status[name] = record
