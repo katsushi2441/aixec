@@ -21,6 +21,30 @@ DEFAULT_GROWTH_TIMEOUT = 1800
 DEFAULT_REGISTER_TIMEOUT = 1800
 
 
+def _standard_result(
+    *,
+    ok: bool,
+    status: str,
+    items: int = 0,
+    metrics: dict[str, Any] | None = None,
+    note: str = "",
+    artifacts: list[dict[str, Any]] | None = None,
+    error: Any = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    result = {
+        "ok": bool(ok),
+        "status": status,
+        "items": int(items or 0),
+        "metrics": metrics or {},
+        "note": note,
+        "artifacts": artifacts or [],
+        "error": error,
+    }
+    result.update(extra)
+    return result
+
+
 def _tail(value: str, limit: int = 4000) -> str:
     if not value:
         return ""
@@ -426,9 +450,52 @@ def market_pipeline_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
         task = _load_task(kwargs, dry_run)
     except RuntimeError as exc:
         finished_at = dt.datetime.now(dt.timezone.utc)
-        return {
-            "status": "skipped",
-            "reason": "market_task_required",
+        return _standard_result(
+            ok=False,
+            status="warn",
+            items=0,
+            metrics={"created": 0, "updated": 0, "skipped": 0, "failed": 0},
+            note="market_pipeline skipped: market_task_required",
+            error=str(exc),
+            **{
+                "created_at": started_at.isoformat(),
+                "finished_at": finished_at.isoformat(),
+                "dry_run": bool(dry_run),
+                "cwd": str(_project_dir()),
+                "command": [
+                "python3",
+                "scripts/register_market_task_worker.py",
+                "--candidate-json-only",
+                ],
+                "returncode": 0,
+                "stdout_tail": "",
+                "stderr_tail": str(exc),
+            },
+        )
+    generated = _generate_market_candidates(task, dry_run, kwargs)
+    submit = _submit_market_candidates(generated["payload"], kwargs, dry_run)
+    finished_at = dt.datetime.now(dt.timezone.utc)
+    submit_response = submit.get("response") if isinstance(submit, dict) else {}
+    submit_result = submit_response.get("result") if isinstance(submit_response, dict) else {}
+    registered = int(submit_result.get("registered") or submit_result.get("items") or 0) if isinstance(submit_result, dict) else 0
+    created = int(submit_result.get("created") or 0) if isinstance(submit_result, dict) else 0
+    updated = int(submit_result.get("updated") or 0) if isinstance(submit_result, dict) else 0
+    selected = int(generated["payload"]["counts"].get("selected") or 0)
+    items = selected if dry_run or not submit.get("submitted") else registered
+    return _standard_result(
+        ok=True,
+        status="ok",
+        items=items,
+        metrics={
+            "selected": selected,
+            "candidates": int(generated["payload"]["counts"].get("candidates") or 0),
+            "registered": registered,
+            "created": created,
+            "updated": updated,
+        },
+        note=f"market_pipeline selected={selected} registered={registered} created={created} updated={updated}",
+        artifacts=[{"type": "file", "label": "candidate_json", "path": generated["output_path"]}],
+        **{
             "created_at": started_at.isoformat(),
             "finished_at": finished_at.isoformat(),
             "dry_run": bool(dry_run),
@@ -438,37 +505,20 @@ def market_pipeline_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
                 "scripts/register_market_task_worker.py",
                 "--candidate-json-only",
             ],
-            "returncode": 0,
-            "stdout_tail": "",
-            "stderr_tail": str(exc),
-        }
-    generated = _generate_market_candidates(task, dry_run, kwargs)
-    submit = _submit_market_candidates(generated["payload"], kwargs, dry_run)
-    finished_at = dt.datetime.now(dt.timezone.utc)
-    return {
-        "status": "ok",
-        "created_at": started_at.isoformat(),
-        "finished_at": finished_at.isoformat(),
-        "dry_run": bool(dry_run),
-        "cwd": str(_project_dir()),
-        "command": [
-            "python3",
-            "scripts/register_market_task_worker.py",
-            "--candidate-json-only",
-        ],
-        "output_path": generated["output_path"],
-        "counts": generated["payload"]["counts"],
-        "submit": submit,
-        "stdout_tail": json.dumps(
-            {
-                "output_path": generated["output_path"],
-                "counts": generated["payload"]["counts"],
-                "submitted": submit.get("submitted"),
-            },
-            ensure_ascii=False,
-        ),
-        "stderr_tail": "",
-    }
+            "output_path": generated["output_path"],
+            "counts": generated["payload"]["counts"],
+            "submit": submit,
+            "stdout_tail": json.dumps(
+                {
+                    "output_path": generated["output_path"],
+                    "counts": generated["payload"]["counts"],
+                    "submitted": submit.get("submitted"),
+                },
+                ensure_ascii=False,
+            ),
+            "stderr_tail": "",
+        },
+    )
 
 
 def growth_agent_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
@@ -493,22 +543,27 @@ def growth_agent_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
     started = bool(result.get("started") or result.get("running") or result.get("pid"))
     status = str(result.get("status") or ("ok" if dry_run or started else "warn"))
     items = int(result.get("items") or (1 if started and not dry_run else 0))
-    return {
-        "status": status,
-        "created_at": started_at.isoformat(),
-        "finished_at": finished_at.isoformat(),
-        "dry_run": bool(dry_run),
-        "cwd": str(_project_dir()),
-        "endpoint": _api_url("growth/run-agent", kwargs),
-        "returncode": 0,
-        "items": items,
-        "created": items,
-        "market_limit": market_limit,
-        "skip_claude": skip_claude,
-        "api_result": result,
-        "stdout_tail": json.dumps(result, ensure_ascii=False)[-4000:],
-        "stderr_tail": "",
-    }
+    return _standard_result(
+        ok=status in {"ok", "warn", "warning"},
+        status="warn" if status in {"warn", "warning"} else status,
+        items=items,
+        metrics={"created": items, "market_limit": market_limit},
+        note=f"growth_agent status={status} items={items} market_limit={market_limit}",
+        **{
+            "created_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "dry_run": bool(dry_run),
+            "cwd": str(_project_dir()),
+            "endpoint": _api_url("growth/run-agent", kwargs),
+            "returncode": 0,
+            "created": items,
+            "market_limit": market_limit,
+            "skip_claude": skip_claude,
+            "api_result": result,
+            "stdout_tail": json.dumps(result, ensure_ascii=False)[-4000:],
+            "stderr_tail": "",
+        },
+    )
 
 
 def register_market_worker_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
@@ -533,15 +588,24 @@ def register_market_worker_job(dry_run: bool = False, **kwargs: Any) -> dict[str
     status = str(api_result.get("status") or ("ok" if trigger_started or dry_run else "warn"))
     total = int(api_result.get("items") or 0)
     finished_at = dt.datetime.now(dt.timezone.utc)
-    return {
-        "status": status,
-        "created_at": started_at.isoformat(),
-        "finished_at": finished_at.isoformat(),
-        "dry_run": bool(dry_run),
-        "cwd": str(project_dir),
-        "endpoint": _api_url("register-market/run-worker", kwargs),
-        "items": total,
-        "created": total,
-        "trigger_started": trigger_started,
-        "api_result": api_result,
-    }
+    return _standard_result(
+        ok=status in {"ok", "warn", "warning"},
+        status="warn" if status in {"warn", "warning"} else status,
+        items=total,
+        metrics={
+            "created": int(api_result.get("created") or api_result.get("books_registered") or api_result.get("market_registered") or total or 0),
+            "updated": int(api_result.get("updated") or 0),
+            "skipped": int(api_result.get("skipped") or api_result.get("books_skipped") or api_result.get("market_skipped") or 0),
+        },
+        note=str(api_result.get("note") or f"register_market_worker status={status} items={total}")[:200],
+        **{
+            "created_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "dry_run": bool(dry_run),
+            "cwd": str(project_dir),
+            "endpoint": _api_url("register-market/run-worker", kwargs),
+            "created": total,
+            "trigger_started": trigger_started,
+            "api_result": api_result,
+        },
+    )
