@@ -144,6 +144,104 @@ def _write_market_result(result):
     payload["saved_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _MARKET_TASK_RESULT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+def _report_register_market(status, items, note):
+    record = {
+        "status": status,
+        "items": items,
+        "note": note[:200],
+        "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    with _worker_status_lock:
+        _worker_status["aixec-register-market-worker-enqueue"] = record
+        _save_worker_status(_worker_status)
+
+def _insert_sns_post(content, author="register"):
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO posts (author, content, created_at, updated_at) VALUES (?, ?, DATETIME('now', 'localtime'), DATETIME('now', 'localtime'))",
+            (author, content),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+def _book_payload_from_rq(item):
+    isbn = re.sub(r"\D", "", str(item.get("isbn") or item.get("jan") or ""))
+    return {
+        "title": item.get("title") or item.get("name") or "",
+        "author": item.get("author") or "",
+        "publisher_name": item.get("publisher_name") or item.get("publisher") or "",
+        "isbn": isbn,
+        "item_caption": item.get("item_caption") or item.get("caption") or item.get("description") or "",
+        "item_price": int(item.get("item_price") or item.get("price") or 0),
+        "item_url": item.get("item_url") or item.get("url") or "",
+        "affiliate_url": item.get("affiliate_url") or item.get("item_url") or item.get("url") or "",
+        "image_url": item.get("image_url") or "",
+        "tab_label": item.get("tab_label") or item.get("label") or "書籍",
+        "tab_group": item.get("tab_group") or item.get("group") or "books",
+    }
+
+def _book_exists(isbn):
+    if not isbn:
+        return True
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM products WHERE jan=? OR internal_sku=? LIMIT 1",
+            (isbn, "rakuten_books:" + isbn),
+        ).fetchone()
+    return row is not None
+
+def _register_rq_book(book):
+    from importlib import import_module
+    ranking = import_module("scripts.register_ranking_books")
+    env = ranking.load_env()
+    local_image = ranking.download_book_image(book, env)
+    book["local_image"] = local_image
+    item = ranking.register_book(book)
+    product_id = item.get("id")
+    if product_id:
+        ranking.upsert_book_attrs(product_id, local_image or book.get("image_url"), book)
+        ranking.update_book_genre_json(product_id, book.get("tab_label", "書籍"), book.get("tab_group", "books"))
+        try:
+            ranking.enrich_book_metadata(product_id)
+        except Exception:
+            pass
+    return product_id, item
+
+def _insert_books_sns_post(new_by_label):
+    if not new_by_label:
+        return None
+    lines = ["📚 新着書籍 登録完了", ""]
+    total = 0
+    for label, names in new_by_label.items():
+        total += len(names)
+        lines.append(f"{label}（{len(names)}件）")
+        for name in names[:10]:
+            lines.append("・" + name)
+        if len(names) > 10:
+            lines.append(f"ほか{len(names) - 10}件")
+        lines.append("")
+    lines.extend(["AIxEC 人気書籍", "https://aixec.exbridge.jp/books_ranking.php"])
+    if total <= 0:
+        return None
+    return _insert_sns_post("\n".join(lines), "register")
+
+def _insert_market_sns_post(new_by_label):
+    if not new_by_label:
+        return None
+    last_id = None
+    for label, names in new_by_label.items():
+        if not names:
+            continue
+        body = "".join("・%s\n" % name for name in names[:10])
+        more = "\nほか%d件\n" % (len(names) - 10) if len(names) > 10 else ""
+        content = (
+            "🛒 楽天市場商品 登録完了 — %s（%d件）\n\n"
+            "ランキング巡回ワーカーが、AIxECに未登録だった楽天市場商品を自動登録しました。\n\n"
+            "%s%s\n%s"
+        ) % (label, len(names), body, more, "https://aixec.exbridge.jp/market_ranking.php")
+        last_id = _insert_sns_post(content, "register")
+    return last_id
+
 def _pid_alive(pid):
     try:
         os.kill(int(pid), 0)
@@ -1029,6 +1127,105 @@ class Handler(BaseHTTPRequestHandler):
 
                 self.send_json({"ok": True, "result": result})
                 return
+            if path == '/register-market/run-once':
+                if not _require_bearer(self.headers, data):
+                    self.send_json({"ok": False, "error": "unauthorized"}, 401)
+                    return
+                dry_run = bool(data.get("dry_run"))
+                source = (data.get("source") or "rqdb4ai").strip() or "rqdb4ai"
+                books = data.get("books") or []
+                market_items = data.get("market_items") or []
+                if not isinstance(books, list):
+                    self.send_json({"ok": False, "error": "books must be array"}, 400)
+                    return
+                if not isinstance(market_items, list):
+                    self.send_json({"ok": False, "error": "market_items must be array"}, 400)
+                    return
+
+                books_registered = books_skipped = market_registered = market_skipped = 0
+                book_results = []
+                market_results = []
+                new_books_by_label = {}
+                new_market_by_label = {}
+
+                try:
+                    for raw in books:
+                        if not isinstance(raw, dict):
+                            books_skipped += 1
+                            continue
+                        book = _book_payload_from_rq(raw)
+                        isbn = book.get("isbn") or ""
+                        if not book.get("title") or not isbn or _book_exists(isbn):
+                            books_skipped += 1
+                            book_results.append({"action": "skipped", "isbn": isbn, "title": book.get("title", "")})
+                            continue
+                        if dry_run:
+                            book_results.append({"action": "planned", "isbn": isbn, "title": book.get("title", "")})
+                            continue
+                        product_id, item = _register_rq_book(book)
+                        if product_id:
+                            books_registered += 1
+                            book_results.append({"action": "created", "product_id": product_id, "isbn": isbn, "title": book["title"]})
+                            new_books_by_label.setdefault(book["tab_label"], []).append(book["title"])
+                        else:
+                            books_skipped += 1
+                            book_results.append({"action": "skipped", "isbn": isbn, "title": book.get("title", "")})
+
+                    from importlib import import_module
+                    market_importer = import_module("scripts.import_rakuten_market_products")
+                    for raw in market_items:
+                        if not isinstance(raw, dict):
+                            market_skipped += 1
+                            continue
+                        label = (raw.get("category_label") or raw.get("label") or "楽天市場商品").strip()
+                        group = (raw.get("category_group") or raw.get("group") or "market_products").strip()
+                        category = {"label": label, "group": group, "genre_id": str(raw.get("genre_id") or "")}
+                        item_code = raw.get("item_code") or ""
+                        jan = raw.get("jan") or ""
+                        if dry_run:
+                            market_results.append(_market_item_summary(raw, None, "planned"))
+                            continue
+                        product_id, action = market_importer.upsert_product(raw, category, upload=False)
+                        if action == "created":
+                            market_registered += 1
+                            new_market_by_label.setdefault(label, []).append(raw.get("name") or item_code or jan or "商品")
+                        else:
+                            market_skipped += 1
+                        market_results.append(_market_item_summary(raw, product_id, action))
+
+                    sns_post_ids = []
+                    if not dry_run and not data.get("skip_sns"):
+                        book_post = _insert_books_sns_post(new_books_by_label)
+                        market_post = _insert_market_sns_post(new_market_by_label)
+                        sns_post_ids = [pid for pid in (book_post, market_post) if pid]
+
+                    items_count = books_registered + market_registered
+                    result = {
+                        "dry_run": dry_run,
+                        "source": source,
+                        "books_received": len(books),
+                        "market_received": len(market_items),
+                        "books_registered": books_registered,
+                        "market_registered": market_registered,
+                        "books_skipped": books_skipped,
+                        "market_skipped": market_skipped,
+                        "items": items_count,
+                        "status": "ok",
+                        "book_items": book_results[:50],
+                        "market_items": market_results[:50],
+                        "sns_post_ids": sns_post_ids,
+                    }
+                    _report_register_market(
+                        "ok",
+                        items_count,
+                        f"books={books_registered} market={market_registered} dry_run={str(dry_run).lower()} source={source}",
+                    )
+                    self.send_json({"ok": True, "result": result})
+                    return
+                except Exception as exc:
+                    _report_register_market("down", 0, "error=" + str(exc))
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+                    return
             if path == '/horizon/run-worker':
                 if not _require_bearer(self.headers, data):
                     self.send_json({"ok": False, "error": "unauthorized"}, 401)
