@@ -1,6 +1,16 @@
 <?php
 // Worker & Ollama ダッシュボード
 $api_base = 'https://aixec.exbridge.jp/api.php?path=';
+$allowed_workers = array(
+    'url2ai-polymarket-enqueue' => true,
+    'url2ai-oss-enqueue' => true,
+    'url2ai-finreport-enqueue' => true,
+    'buzblogger-enqueue' => true,
+    'horizon-worker-enqueue' => true,
+    'aixec-market-pipeline-enqueue' => true,
+    'aixec-register-market-worker-enqueue' => true,
+    'aixec-growth-agent-enqueue' => true,
+);
 
 function dash_h($value) {
     return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
@@ -46,7 +56,9 @@ function render_ollama($data) {
 }
 
 function render_workers($data) {
+    global $allowed_workers;
     $workers = isset($data['workers']) && is_array($data['workers']) ? $data['workers'] : array();
+    $workers = array_intersect_key($workers, $allowed_workers);
     if (!$workers) return '<div class="status-msg">報告なし</div>';
     uasort($workers, function($a, $b) {
         $ta = strtotime(isset($a['reported_at']) ? $a['reported_at'] : '') ?: 0;
@@ -60,27 +72,12 @@ function render_workers($data) {
     return $html . '</tbody></table>';
 }
 
-function render_market($data) {
-    $m = isset($data['result']) && is_array($data['result']) ? $data['result'] : array();
-    if (!$m) return '<div class="status-msg">登録結果なし</div>';
-    $run_type = !empty($m['dry_run']) ? '<span class="badge warn">DRY RUN</span> ' : '<span class="badge ok">本登録</span> ';
-    $html = '<div class="muted">' . $run_type . dash_h(isset($m['label']) ? $m['label'] : '-') . ' / ' . dash_h(isset($m['group']) ? $m['group'] : '-') . ' / 最終更新 ' . dash_h(isset($m['updated_at']) ? $m['updated_at'] : '-') . '</div>';
-    $html .= '<div class="metric-grid">';
-    foreach (array('registered' => '登録件数', 'created' => '新規', 'updated' => '更新', 'candidates' => '候補', 'selected' => '選定') as $key => $label) {
-        $html .= '<div class="metric"><b>' . dash_h(isset($m[$key]) ? $m[$key] : 0) . '</b><span>' . dash_h($label) . '</span></div>';
-    }
-    $html .= '</div><div class="item-list">';
-    $items = isset($m['items']) && is_array($m['items']) ? array_slice($m['items'], 0, 6) : array();
-    if ($items) {
-        foreach ($items as $item) $html .= '<div>・' . dash_h(isset($item['name']) ? $item['name'] : '') . '</div>';
-    } else {
-        $html .= '<div class="muted">商品リストなし</div>';
-    }
-    return $html . '</div>';
-}
-
 function render_schedule($data) {
+    global $allowed_workers;
     $workers = isset($data['schedule']['workers']) && is_array($data['schedule']['workers']) ? $data['schedule']['workers'] : array();
+    $workers = array_values(array_filter($workers, function($w) use ($allowed_workers) {
+        return isset($w['name']) && isset($allowed_workers[$w['name']]);
+    }));
     if (!$workers) return '<div class="status-msg">スケジュールなし</div>';
     $html = '<table><thead><tr><th>時刻</th><th>Worker</th><th>Ollama</th><th>サーバー</th><th>内容</th></tr></thead><tbody>';
     foreach ($workers as $w) {
@@ -91,7 +88,6 @@ function render_schedule($data) {
 
 $initial_ollama = dash_fetch_json('ollama/status');
 $initial_workers = dash_fetch_json('worker/status');
-$initial_market = dash_fetch_json('market/pipeline/status');
 $initial_schedule = dash_fetch_json('schedule');
 ?><!DOCTYPE html>
 <html lang="ja">
@@ -178,10 +174,6 @@ tr:hover td{background:#fbfdff}
     <div id="worker-status"><?php echo render_workers($initial_workers); ?></div>
   </div>
   <div class="card full">
-    <h2>商品登録パイプライン <span class="refresh" id="market-updated"></span></h2>
-    <div id="market-status"><?php echo render_market($initial_market); ?></div>
-  </div>
-  <div class="card full">
     <h2>本日のスケジュール <span class="refresh" id="schedule-updated"></span></h2>
     <div id="schedule"><?php echo render_schedule($initial_schedule); ?></div>
   </div>
@@ -189,6 +181,16 @@ tr:hover td{background:#fbfdff}
 </div>
 <script>
 const API = 'https://aixec.exbridge.jp/api.php?path=';
+const ALLOWED_WORKERS = new Set([
+  'url2ai-polymarket-enqueue',
+  'url2ai-oss-enqueue',
+  'url2ai-finreport-enqueue',
+  'buzblogger-enqueue',
+  'horizon-worker-enqueue',
+  'aixec-market-pipeline-enqueue',
+  'aixec-register-market-worker-enqueue',
+  'aixec-growth-agent-enqueue'
+]);
 
 function fmt(s){return s||'-'}
 function esc(s){
@@ -236,7 +238,7 @@ async function loadWorkerStatus(){
     const r=await fetch(API+'worker/status');
     const d=await r.json();
     const ws=d.workers||{};
-    const keys=Object.keys(ws);
+    const keys=Object.keys(ws).filter(name => ALLOWED_WORKERS.has(name));
     if(!keys.length){document.getElementById('worker-status').innerHTML='<div class="status-msg">報告なし</div>';return;}
     let html='<table><thead><tr><th>Worker</th><th>状態</th><th>件数</th><th>最終実行</th><th>メモ</th></tr></thead><tbody>';
     const sortedKeys=keys.sort((a,b)=>{
@@ -256,41 +258,11 @@ async function loadWorkerStatus(){
   }catch(e){document.getElementById('worker-status').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';}
 }
 
-async function loadMarketPipeline(){
-  try{
-    const r=await fetch(API+'market/pipeline/status');
-    const d=await r.json();
-    const m=d.result||{};
-    if(!Object.keys(m).length){
-      document.getElementById('market-status').innerHTML='<div class="status-msg">登録結果なし</div>';
-      return;
-    }
-    const items=m.items||[];
-    const names=items.slice(0,6).map(x=>`<div>・${esc(x.name||'')}</div>`).join('');
-    const runType=m.dry_run ? '<span class="badge warn">DRY RUN</span> ' : '<span class="badge ok">本登録</span> ';
-    const html=`
-      <div class="muted">${runType}${esc(m.label||'-')} / ${esc(m.group||'-')} / 最終更新 ${esc(m.updated_at||'-')}</div>
-      <div class="metric-grid">
-        <div class="metric"><b>${esc(m.registered??0)}</b><span>登録件数</span></div>
-        <div class="metric"><b>${esc(m.created??0)}</b><span>新規</span></div>
-        <div class="metric"><b>${esc(m.updated??0)}</b><span>更新</span></div>
-        <div class="metric"><b>${esc(m.candidates??0)}</b><span>候補</span></div>
-        <div class="metric"><b>${esc(m.selected??0)}</b><span>選定</span></div>
-      </div>
-      <div class="item-list">${names || '<div class="muted">商品リストなし</div>'}</div>
-    `;
-    document.getElementById('market-status').innerHTML=html;
-    document.getElementById('market-updated').textContent='更新: '+now_hhmm();
-  }catch(e){
-    document.getElementById('market-status').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';
-  }
-}
-
 async function loadSchedule(){
   try{
     const r=await fetch(API+'schedule');
     const d=await r.json();
-    const workers=d.schedule?.workers||[];
+    const workers=(d.schedule?.workers||[]).filter(w => ALLOWED_WORKERS.has(w.name));
     const cur=now_hhmm();
     let html='<table><thead><tr><th>時刻</th><th>Worker</th><th>Ollama</th><th>サーバー</th><th>内容</th></tr></thead><tbody>';
     for(const w of workers){
@@ -306,11 +278,10 @@ async function loadSchedule(){
   }catch(e){document.getElementById('schedule').innerHTML='<div class="status-msg" style="color:#991b1b;background:#fef2f2;border-color:#fecaca">取得失敗</div>';}
 }
 
-function loadAll(){loadOllama();loadWorkerStatus();loadMarketPipeline();loadSchedule();}
+function loadAll(){loadOllama();loadWorkerStatus();loadSchedule();}
 loadAll();
 setInterval(loadOllama,30000);
 setInterval(loadWorkerStatus,15000);
-setInterval(loadMarketPipeline,15000);
 setInterval(loadSchedule,60000);
 </script>
 </body>

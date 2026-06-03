@@ -24,6 +24,16 @@ _MARKET_TASK_RESULT_PATH = ROOT / "tasks" / "market_task_result.json"
 _HORIZON_LOCK_PATH = Path("/tmp/horizon_worker_api.pid")
 _HORIZON_LOG_PATH = Path("/tmp/horizon_worker.log")
 _worker_status_lock = threading.Lock()
+ALLOWED_WORKER_NAMES = {
+    "url2ai-polymarket-enqueue",
+    "url2ai-oss-enqueue",
+    "url2ai-finreport-enqueue",
+    "buzblogger-enqueue",
+    "horizon-worker-enqueue",
+    "aixec-market-pipeline-enqueue",
+    "aixec-register-market-worker-enqueue",
+    "aixec-growth-agent-enqueue",
+}
 
 def _load_worker_status():
     try:
@@ -41,6 +51,8 @@ def _save_worker_status(data):
         pass
 
 _worker_status = _load_worker_status()
+_worker_status = {k: v for k, v in _worker_status.items() if k in ALLOWED_WORKER_NAMES}
+_save_worker_status(_worker_status)
 
 def _require_bearer(headers, data=None):
     token = os.environ.get("AIXEC_MARKET_REGISTER_TOKEN") or os.environ.get("AIXEC_API_TOKEN")
@@ -536,7 +548,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/worker/status':
                 with _worker_status_lock:
-                    self.send_json({"ok": True, "workers": dict(_worker_status)})
+                    workers = {k: v for k, v in _worker_status.items() if k in ALLOWED_WORKER_NAMES}
+                    self.send_json({"ok": True, "workers": workers})
                 return
             if path == '/market/pipeline/status':
                 self.send_json({"ok": True, "result": _load_market_pipeline_result()})
@@ -570,7 +583,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"time": "06:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
                         {"time": "07:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
                         {"time": "07:30", "name": "aixec-register-market-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへregister_market_workerをenqueue"},
-                        {"time": "08:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "hermes": "91de360198b2", "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
+                        {"time": "08:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
                         {"time": "09:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへFinReport自動サイクルをenqueue"},
                         {"time": "12:05", "name": "url2ai-polymarket-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへPolymarket自動サイクルをenqueue"},
                         {"time": "12:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
@@ -582,7 +595,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"time": "18:10", "name": "url2ai-oss-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへOSS自動サイクルをenqueue"},
                         {"time": "19:20", "name": "buzblogger-enqueue", "server": "this", "ollama": False, "hermes": "af345fc38800", "note": "RQDB4AI APIへBuzBlogger自動サイクルをenqueue"},
                         {"time": "19:30", "name": "aixec-register-market-worker-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへregister_market_workerをenqueue"},
-                        {"time": "20:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "hermes": "91de360198b2", "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
+                        {"time": "20:00", "name": "aixec-market-pipeline-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへAIxEC market pipelineをenqueue"},
                         {"time": "21:10", "name": "url2ai-finreport-enqueue", "server": "this", "ollama": False, "note": "RQDB4AI APIへFinReport自動サイクルをenqueue"},
                     ]
                 }
@@ -871,6 +884,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     self.send_json({"ok": False, "error": "name required"}, 400)
                     return
+                if name not in ALLOWED_WORKER_NAMES:
+                    self.send_json({"ok": False, "error": "worker not allowed"}, 400)
+                    return
                 record = {
                     "status":   data.get("status", "ok"),
                     "items":    data.get("items", 0),
@@ -951,12 +967,9 @@ class Handler(BaseHTTPRequestHandler):
 
                 if not dry_run:
                     with _worker_status_lock:
-                        _worker_status["market-register-api"] = {
-                            "status": "ok",
-                            "items": registered,
-                            "note": f"{label} registered={registered} created={created} updated={updated}"[:200],
-                            "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        }
+                        for key in list(_worker_status.keys()):
+                            if key not in ALLOWED_WORKER_NAMES:
+                                _worker_status.pop(key, None)
                         _save_worker_status(_worker_status)
 
                 self.send_json({"ok": True, "result": result})
@@ -980,7 +993,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 result = _start_horizon_worker()
                 with _worker_status_lock:
-                    _worker_status["horizon-worker-trigger"] = {
+                    _worker_status["horizon-worker-enqueue"] = {
                         "status": "ok",
                         "items": 1 if result.get("started") else 0,
                         "note": f"triggered started={result.get('started')} pid={result.get('pid')}"[:200],
