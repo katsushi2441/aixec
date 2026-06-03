@@ -1,5 +1,5 @@
 <?php
-// Worker & Ollama ダッシュボード
+// Hermes / RQDB4AI Worker Dashboard
 $api_base = 'https://aixec.exbridge.jp/api.php?path=';
 $allowed_workers = array(
     'url2ai-polymarket-enqueue' => true,
@@ -22,7 +22,7 @@ function dash_fetch_json($path) {
     $context = stream_context_create(array(
         'http' => array(
             'timeout' => 8,
-            'header' => "User-Agent: AIxEC-Dashboard/1.0\r\n"
+            'header' => "User-Agent: Hermes-Dashboard/1.0\r\n"
         )
     ));
     $raw = @file_get_contents($url, false, $context);
@@ -97,7 +97,7 @@ $initial_schedule = dash_fetch_json('schedule');
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AIxEC Worker Dashboard</title>
+<title>Hermes Worker Dashboard</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans JP',sans-serif;background:#f6f8fb;color:#172033;padding:18px;line-height:1.55}
@@ -164,7 +164,7 @@ tr:hover td{background:#fbfdff}
 <body>
 <div class="shell">
 <div class="top">
-  <h1>AIxEC Worker Dashboard<span>商品登録・記事生成・Ollama稼働状況</span></h1>
+  <h1>Hermes Worker Dashboard<span>RQDB4AIジョブ投入・Worker実行結果・Ollama稼働状況</span></h1>
   <div class="clock-card"><div id="clock"></div><div id="date"></div></div>
 </div>
 <div class="grid">
