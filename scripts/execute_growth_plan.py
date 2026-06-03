@@ -76,9 +76,7 @@ def main():
                 lines.append("")
                 continue
             market_registration_done = True
-            limit = int(action.get("limit") or args.market_limit)
-            if args.dry_run:
-                limit = min(limit, args.market_limit)
+            limit = min(int(action.get("limit") or args.market_limit), args.market_limit)
             cmd = [
                 sys.executable,
                 "scripts/autonomous_market_pipeline.py",
@@ -91,6 +89,8 @@ def main():
                 "1",
                 "--max-candidates",
                 str(max(limit * 3, 30)),
+                "--score-mode",
+                "heuristic",
             ]
             if args.dry_run:
                 cmd.append("--dry-run")

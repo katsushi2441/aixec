@@ -5,17 +5,28 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import glob
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CLAUDE_BIN = os.environ.get(
-    "CLAUDE_BIN",
-    "/home/kojima/.vscode-server/extensions/anthropic.claude-code-2.1.145-linux-x64/resources/native-binary/claude",
-)
 OBS = ROOT / "tasks" / "growth_observation.md"
 SCHEMA = ROOT / "tasks" / "growth_plan.schema.json"
 OUT = ROOT / "tasks" / "growth_plan.generated.json"
 RAW = ROOT / "tasks" / "growth_plan.claude_raw.json"
+
+
+def resolve_claude_bin():
+    configured = os.environ.get("CLAUDE_BIN")
+    if configured and Path(configured).exists():
+        return configured
+    candidates = sorted(
+        glob.glob("/home/kojima/.vscode-server/extensions/anthropic.claude-code-*-linux-x64/resources/native-binary/claude"),
+        reverse=True,
+    )
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return configured or "claude"
 
 
 def main():
@@ -37,7 +48,7 @@ OBSERVATION:
 {OBS.read_text(encoding='utf-8')}
 """
     cmd = [
-        CLAUDE_BIN,
+        resolve_claude_bin(),
         "-p",
         "--output-format",
         "json",
@@ -61,4 +72,3 @@ OBSERVATION:
 
 if __name__ == "__main__":
     main()
-

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "storage" / "growth_agent.lock"
 LOG = ROOT / "storage" / "autonomous" / "growth_agent.log"
+API_BASE = os.environ.get("AIXEC_API_BASE", "http://127.0.0.1:8081")
 
 
 def log(msg):
@@ -31,6 +34,26 @@ def run(cmd, timeout=None):
         log("stderr:\n" + result.stderr[-4000:])
     if result.returncode != 0:
         raise RuntimeError("failed: " + " ".join(cmd))
+
+
+def report_worker(status, items=0, note=""):
+    try:
+        payload = json.dumps({
+            "name": "aixec-growth-agent-enqueue",
+            "status": status,
+            "items": int(items or 0),
+            "note": str(note or "")[:200],
+        }, ensure_ascii=False).encode("utf-8")
+        req = Request(
+            API_BASE.rstrip("/") + "/worker/report",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=10) as res:
+            res.read()
+    except Exception as exc:
+        log("worker report failed: %s" % exc)
 
 
 def acquire():
@@ -63,6 +86,7 @@ def main():
     args = parser.parse_args()
     acquire()
     try:
+        report_worker("running", 0, "growth agent running")
         run([sys.executable, "scripts/build_growth_observation.py"], timeout=180)
         if not args.skip_claude:
             run([sys.executable, "scripts/claude_growth_planner.py"], timeout=900)
@@ -70,11 +94,14 @@ def main():
         if args.dry_run:
             cmd.append("--dry-run")
         run(cmd, timeout=None)
+        report_worker("ok", 1, "growth agent complete dry_run=%s" % args.dry_run)
         log("growth agent complete")
+    except Exception as exc:
+        report_worker("down", 0, "error=%s" % exc)
+        raise
     finally:
         release()
 
 
 if __name__ == "__main__":
     main()
-

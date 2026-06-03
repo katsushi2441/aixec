@@ -36,7 +36,7 @@ def log(msg):
 def report_worker(status, items=0, note=""):
     try:
         payload = json.dumps({
-            "name": "market-pipeline",
+            "name": "aixec-market-pipeline-enqueue",
             "status": status,
             "items": int(items or 0),
             "note": str(note or "")[:200],

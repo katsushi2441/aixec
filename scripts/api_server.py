@@ -23,6 +23,8 @@ _WORKER_STATUS_PATH = ROOT / "storage" / "worker_status.json"
 _MARKET_TASK_RESULT_PATH = ROOT / "tasks" / "market_task_result.json"
 _HORIZON_LOCK_PATH = Path("/tmp/horizon_worker_api.pid")
 _HORIZON_LOG_PATH = Path("/tmp/horizon_worker.log")
+_GROWTH_LOCK_PATH = ROOT / "storage" / "growth_agent.lock"
+_GROWTH_LOG_PATH = ROOT / "storage" / "autonomous" / "growth_agent.log"
 _worker_status_lock = threading.Lock()
 _response_cache_lock = threading.Lock()
 _response_cache = {}
@@ -291,6 +293,38 @@ def _start_horizon_worker():
     )
     _HORIZON_LOCK_PATH.write_text(str(proc.pid), encoding="utf-8")
     return {"started": True, "already_running": False, "pid": proc.pid, "ssh_agent": bool(ssh_sock)}
+
+def _growth_running():
+    if _GROWTH_LOCK_PATH.exists():
+        pid = _GROWTH_LOCK_PATH.read_text(encoding="utf-8").strip()
+        if pid and _pid_alive(pid):
+            return int(pid)
+    return 0
+
+def _start_growth_agent(dry_run=False, skip_claude=False, market_limit=20):
+    running = _growth_running()
+    if running:
+        return {"started": False, "already_running": True, "pid": running}
+    cmd = [
+        sys.executable,
+        "scripts/growth_agent_pipeline.py",
+        "--market-limit",
+        str(int(market_limit or 20)),
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    if skip_claude:
+        cmd.append("--skip-claude")
+    _GROWTH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = _GROWTH_LOG_PATH.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    return {"started": True, "already_running": False, "pid": proc.pid, "command": " ".join(cmd)}
 
 def _load_market_pipeline_result():
     if not _MARKET_TASK_RESULT_PATH.exists():
@@ -1249,6 +1283,35 @@ class Handler(BaseHTTPRequestHandler):
                         "status": "ok",
                         "items": 1 if result.get("started") else 0,
                         "note": f"triggered started={result.get('started')} pid={result.get('pid')}"[:200],
+                        "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    _save_worker_status(_worker_status)
+                self.send_json({"ok": True, "result": result})
+                return
+            if path == '/growth/run-agent':
+                if not _require_bearer(self.headers, data):
+                    self.send_json({"ok": False, "error": "unauthorized"}, 401)
+                    return
+                dry_run = bool(data.get("dry_run"))
+                skip_claude = bool(data.get("skip_claude"))
+                market_limit = int(data.get("market_limit") or 20)
+                running_pid = _growth_running()
+                if dry_run and bool(data.get("check_only")):
+                    self.send_json({
+                        "ok": True,
+                        "result": {
+                            "dry_run": True,
+                            "running": bool(running_pid),
+                            "pid": running_pid,
+                        },
+                    })
+                    return
+                result = _start_growth_agent(dry_run=dry_run, skip_claude=skip_claude, market_limit=market_limit)
+                with _worker_status_lock:
+                    _worker_status["aixec-growth-agent-enqueue"] = {
+                        "status": "running" if result.get("started") or result.get("already_running") else "down",
+                        "items": 0,
+                        "note": f"triggered started={result.get('started')} already_running={result.get('already_running')} pid={result.get('pid')}"[:200],
                         "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }
                     _save_worker_status(_worker_status)
