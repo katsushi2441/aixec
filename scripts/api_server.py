@@ -321,7 +321,13 @@ def _insert_market_sns_post(new_by_label):
 
 def _pid_alive(pid):
     try:
-        os.kill(int(pid), 0)
+        pid_int = int(pid)
+        stat_path = Path("/proc") / str(pid_int) / "stat"
+        if stat_path.exists():
+            parts = stat_path.read_text(encoding="utf-8", errors="replace").split()
+            if len(parts) > 2 and parts[2] == "Z":
+                return False
+        os.kill(pid_int, 0)
         return True
     except Exception:
         return False
@@ -1402,8 +1408,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = _start_horizon_worker()
                 with _worker_status_lock:
                     _worker_status["horizon-worker-enqueue"] = {
-                        "status": "ok",
-                        "items": 1 if result.get("started") else 0,
+                        "status": "running" if result.get("started") or result.get("already_running") else "down",
+                        "items": 0,
                         "note": f"triggered started={result.get('started')} pid={result.get('pid')}"[:200],
                         "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }
