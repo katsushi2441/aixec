@@ -337,6 +337,10 @@ def _horizon_running():
         pid = _HORIZON_LOCK_PATH.read_text(encoding="utf-8").strip()
         if pid and _pid_alive(pid):
             return int(pid)
+        try:
+            _HORIZON_LOCK_PATH.unlink()
+        except Exception:
+            pass
     return 0
 
 def _find_ssh_agent_sock():
