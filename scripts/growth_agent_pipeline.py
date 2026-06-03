@@ -83,6 +83,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-claude", action="store_true", help="reuse existing growth_plan.generated.json")
     parser.add_argument("--market-limit", type=int, default=20)
+    parser.add_argument(
+        "--allow-market-registration",
+        action="store_true",
+        help="allow growth plan market_registration actions to run the market pipeline",
+    )
     args = parser.parse_args()
     acquire()
     try:
@@ -93,6 +98,8 @@ def main():
         cmd = [sys.executable, "scripts/execute_growth_plan.py", "--market-limit", str(args.market_limit)]
         if args.dry_run:
             cmd.append("--dry-run")
+        if args.allow_market_registration:
+            cmd.append("--allow-market-registration")
         run(cmd, timeout=None)
         report_worker("ok", 1, "growth agent complete dry_run=%s" % args.dry_run)
         log("growth agent complete")

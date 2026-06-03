@@ -50,6 +50,11 @@ def main():
     parser.add_argument("--plan", default=str(PLAN))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--market-limit", type=int, default=20)
+    parser.add_argument(
+        "--allow-market-registration",
+        action="store_true",
+        help="allow growth actions to run autonomous_market_pipeline.py",
+    )
     args = parser.parse_args()
 
     plan_path = Path(args.plan)
@@ -70,6 +75,11 @@ def main():
         atype = action.get("type")
         lines.append("## Action: %s" % atype)
         if atype == "market_registration":
+            if not args.allow_market_registration:
+                lines.append("skipped: market_registration is managed by the dedicated market pipeline job")
+                memory_lines.append("market_registration skipped separate pipeline")
+                lines.append("")
+                continue
             if market_registration_done:
                 lines.append("skipped: market_registration already executed in this cycle")
                 memory_lines.append("market_registration skipped duplicate")
