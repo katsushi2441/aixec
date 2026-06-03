@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """楽天市場商品登録ワーカー — 書籍以外の楽天市場ジャンルを定期巡回する。"""
 import json
+import argparse
 import os
 import signal
 import sys
@@ -54,57 +55,76 @@ def post_to_sns(content):
 
 def report_worker(status, items, note=""):
     try:
-        payload = json.dumps({"name": "register_market_worker", "status": status, "items": items, "note": note}).encode()
+        payload = json.dumps({
+            "name": "aixec-register-market-worker-enqueue",
+            "status": status,
+            "items": items,
+            "note": note,
+        }).encode()
         req = Request(API_BASE + "/worker/report", data=payload, headers={"Content-Type": "application/json"}, method="POST")
         urlopen(req, timeout=10)
     except Exception as exc:
         log("worker/report エラー: %s" % exc)
 
 
-def run_once():
+def run_once(dry_run=False):
     sys.path.insert(0, str(ROOT / "scripts"))
     from import_rakuten_market_products import run_categories
 
-    log("--- 楽天市場商品チェック開始 ---")
-    report_worker("running", 0, "チェック中")
-    new_by_category = run_categories(hits=HITS, delay=DELAY, upload_images=UPLOAD_IMAGES)
+    log("--- 楽天市場商品チェック開始 dry_run=%s ---" % dry_run)
+    report_worker("running", 0, "register_market_worker running dry_run=%s" % str(dry_run).lower())
+    new_by_category = run_categories(hits=HITS, delay=DELAY, upload_images=UPLOAD_IMAGES, dry_run=dry_run)
     total = sum(len(v) for v in new_by_category.values())
     log("--- 完了: 新規 %d件 ---" % total)
-    report_worker("ok", total, "新規%d件" % total)
+    report_worker("ok", total, "register_market_worker complete books=0 market=%d updated=0 dry_run=%s" % (total, str(dry_run).lower()))
 
-    for label, names in new_by_category.items():
-        if not names:
-            continue
-        url = CATEGORY_URLS.get(label, "https://aixec.exbridge.jp/market_ranking.php")
-        body = "".join("・%s\n" % name for name in names[:10])
-        more = "\nほか%d件\n" % (len(names) - 10) if len(names) > 10 else ""
-        content = (
-            "🛒 楽天市場商品 登録完了 — %s（%d件）\n\n"
-            "ランキング巡回ワーカーが、AIxECに未登録だった楽天市場商品を自動登録しました。\n\n"
-            "%s%s\n%s"
-        ) % (label, len(names), body, more, url)
-        try:
-            post_id = post_to_sns(content)
-            log("sns.php 投稿完了 [%s] (id=%s)" % (label, post_id))
-        except Exception as exc:
-            log("sns.php 投稿エラー [%s]: %s" % (label, exc))
+    if not dry_run:
+        for label, names in new_by_category.items():
+            if not names:
+                continue
+            url = CATEGORY_URLS.get(label, "https://aixec.exbridge.jp/market_ranking.php")
+            body = "".join("・%s\n" % name for name in names[:10])
+            more = "\nほか%d件\n" % (len(names) - 10) if len(names) > 10 else ""
+            content = (
+                "🛒 楽天市場商品 登録完了 — %s（%d件）\n\n"
+                "ランキング巡回ワーカーが、AIxECに未登録だった楽天市場商品を自動登録しました。\n\n"
+                "%s%s\n%s"
+            ) % (label, len(names), body, more, url)
+            try:
+                post_id = post_to_sns(content)
+                log("sns.php 投稿完了 [%s] (id=%s)" % (label, post_id))
+            except Exception as exc:
+                log("sns.php 投稿エラー [%s]: %s" % (label, exc))
 
     return total
 
 
 def main():
     global _running
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true", help="run one cycle and exit")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
     PID_PATH.parent.mkdir(parents=True, exist_ok=True)
     PID_PATH.write_text(str(os.getpid()))
-    log("register_market_worker 起動 (PID=%s, interval=%ss, hits=%s, delay=%ss)" % (os.getpid(), INTERVAL, HITS, DELAY))
+    log("register_market_worker 起動 (PID=%s, once=%s, dry_run=%s, interval=%ss, hits=%s, delay=%ss)" % (os.getpid(), args.once, args.dry_run, INTERVAL, HITS, DELAY))
 
     try:
+        if args.once:
+            try:
+                run_once(dry_run=args.dry_run)
+            except Exception as exc:
+                log("run_once 例外: %s" % exc)
+                report_worker("down", 0, "error=%s" % exc)
+                raise
+            return
         while _running:
             try:
-                run_once()
+                run_once(dry_run=args.dry_run)
             except Exception as exc:
                 log("run_once 例外: %s" % exc)
 

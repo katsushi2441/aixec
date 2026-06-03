@@ -25,6 +25,8 @@ _HORIZON_LOCK_PATH = Path("/tmp/horizon_worker_api.pid")
 _HORIZON_LOG_PATH = Path("/tmp/horizon_worker.log")
 _GROWTH_LOCK_PATH = ROOT / "storage" / "growth_agent.lock"
 _GROWTH_LOG_PATH = ROOT / "storage" / "autonomous" / "growth_agent.log"
+_REGISTER_MARKET_PID_PATH = ROOT / "storage" / "register_market_worker.pid"
+_REGISTER_MARKET_LOG_PATH = ROOT / "storage" / "register_market_worker.log"
 _worker_status_lock = threading.Lock()
 _response_cache_lock = threading.Lock()
 _response_cache = {}
@@ -325,6 +327,44 @@ def _start_growth_agent(dry_run=False, skip_claude=False, market_limit=20):
         start_new_session=True,
     )
     return {"started": True, "already_running": False, "pid": proc.pid, "command": " ".join(cmd)}
+
+def _register_market_worker_running():
+    if _REGISTER_MARKET_PID_PATH.exists():
+        pid = _REGISTER_MARKET_PID_PATH.read_text(encoding="utf-8").strip()
+        if pid and _pid_alive(pid):
+            return int(pid)
+    return 0
+
+def _start_register_market_worker(dry_run=False):
+    running = _register_market_worker_running()
+    if running:
+        return {
+            "dry_run": dry_run,
+            "running": True,
+            "started": False,
+            "already_running": True,
+            "pid": running,
+        }
+    cmd = [sys.executable, "scripts/register_market_worker.py", "--once"]
+    if dry_run:
+        cmd.append("--dry-run")
+    _REGISTER_MARKET_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = _REGISTER_MARKET_LOG_PATH.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    return {
+        "dry_run": dry_run,
+        "running": False,
+        "started": True,
+        "already_running": False,
+        "pid": proc.pid,
+        "command": " ".join(cmd),
+    }
 
 def _load_market_pipeline_result():
     if not _MARKET_TASK_RESULT_PATH.exists():
@@ -1260,6 +1300,38 @@ class Handler(BaseHTTPRequestHandler):
                     _report_register_market("down", 0, "error=" + str(exc))
                     self.send_json({"ok": False, "error": str(exc)}, 500)
                     return
+            if path == '/register-market/run-worker':
+                if not _require_bearer(self.headers, data):
+                    self.send_json({"ok": False, "error": "unauthorized"}, 401)
+                    return
+                dry_run = bool(data.get("dry_run"))
+                check_only = bool(data.get("check_only"))
+                running_pid = _register_market_worker_running()
+                if check_only:
+                    self.send_json({
+                        "ok": True,
+                        "result": {
+                            "dry_run": dry_run,
+                            "running": bool(running_pid),
+                            "started": False,
+                            "already_running": bool(running_pid),
+                            "pid": running_pid,
+                            "dry_run_supported": True,
+                        },
+                    })
+                    return
+                result = _start_register_market_worker(dry_run=dry_run)
+                with _worker_status_lock:
+                    _worker_status["aixec-register-market-worker-enqueue"] = {
+                        "status": "running" if result.get("started") or result.get("already_running") else "down",
+                        "items": 0,
+                        "note": f"triggered started={result.get('started')} already_running={result.get('already_running')} pid={result.get('pid')}"[:200],
+                        "reported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    _save_worker_status(_worker_status)
+                result["dry_run_supported"] = True
+                self.send_json({"ok": True, "result": result})
+                return
             if path == '/horizon/run-worker':
                 if not _require_bearer(self.headers, data):
                     self.send_json({"ok": False, "error": "unauthorized"}, 401)
