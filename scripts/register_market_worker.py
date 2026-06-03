@@ -69,14 +69,22 @@ def report_worker(status, items, note=""):
 
 def run_once(dry_run=False):
     sys.path.insert(0, str(ROOT / "scripts"))
-    from import_rakuten_market_products import run_categories
+    import import_rakuten_market_products as market_import
 
     log("--- 楽天市場商品チェック開始 dry_run=%s ---" % dry_run)
     report_worker("running", 0, "register_market_worker running dry_run=%s" % str(dry_run).lower())
-    new_by_category = run_categories(hits=HITS, delay=DELAY, upload_images=UPLOAD_IMAGES, dry_run=dry_run)
+    new_by_category = market_import.run_categories(hits=HITS, delay=DELAY, upload_images=UPLOAD_IMAGES, dry_run=dry_run)
+    stats = getattr(market_import, "LAST_RUN_STATS", {}) or {}
     total = sum(len(v) for v in new_by_category.values())
+    updated = int(stats.get("updated") or 0)
+    skipped = int(stats.get("skipped") or 0)
     log("--- 完了: 新規 %d件 ---" % total)
-    report_worker("ok", total, "register_market_worker complete books=0 market=%d updated=0 dry_run=%s" % (total, str(dry_run).lower()))
+    report_worker(
+        "ok",
+        total,
+        "register_market_worker complete books=0 market=%d created=%d updated=%d skipped=%d dry_run=%s"
+        % (total, total, updated, skipped, str(dry_run).lower()),
+    )
 
     if not dry_run:
         for label, names in new_by_category.items():

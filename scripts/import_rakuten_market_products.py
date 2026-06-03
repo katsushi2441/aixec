@@ -21,6 +21,7 @@ RAKUTEN_ITEM_ENDPOINT = os.environ.get(
     "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260401",
 )
 DEFAULT_DELAY = float(os.environ.get("RAKUTEN_MARKET_IMPORT_DELAY", "4.0"))
+LAST_RUN_STATS = {"created": 0, "updated": 0, "skipped": 0}
 
 CATEGORIES = [
     {
@@ -567,6 +568,7 @@ def run_categories(categories=None, hits=10, delay=DEFAULT_DELAY, upload_images=
     Returns:
         dict: {category_label: [新規登録商品名, ...]}
     """
+    global LAST_RUN_STATS
     load_env()
     cats = selected_categories(categories or [])
     if not cats:
@@ -599,6 +601,7 @@ def run_categories(categories=None, hits=10, delay=DEFAULT_DELAY, upload_images=
                     total_skipped += 1
                 print("  %s id=%s %s" % (action, product_id, item.get("name")[:70]), flush=True)
             time.sleep(delay)
+    LAST_RUN_STATS = {"created": total_created, "updated": total_updated, "skipped": total_skipped}
     print("done created=%d updated=%d skipped=%d" % (total_created, total_updated, total_skipped), flush=True)
     return created_by_category
 

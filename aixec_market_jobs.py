@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -237,6 +238,30 @@ def _api_post(path: str, payload: dict[str, Any], kwargs: dict[str, Any], timeou
     if token and "api_token" not in request_payload:
         request_payload["api_token"] = str(token)
     return _post_json(_api_url(path, kwargs), request_payload, timeout=timeout)
+
+
+def _worker_status(name: str, kwargs: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
+    try:
+        payload = _api_get("worker/status", kwargs, timeout=timeout)
+    except Exception as exc:
+        return {"status": "unknown", "items": 0, "note": f"worker/status unavailable: {exc}"}
+    workers = payload.get("workers") if isinstance(payload, dict) else None
+    if isinstance(workers, dict) and isinstance(workers.get(name), dict):
+        return dict(workers.get(name) or {})
+    return {"status": "unknown", "items": 0, "note": f"{name} not found"}
+
+
+def _metrics_from_worker_status(record: dict[str, Any]) -> dict[str, int]:
+    note = str(record.get("note") or "")
+    items = int(record.get("items") or 0)
+    metrics = {"created": items}
+    for key in ("created", "updated", "skipped", "failed", "market", "books"):
+        match = re.search(rf"\b{re.escape(key)}=(\d+)", note)
+        if match:
+            metrics[key] = int(match.group(1))
+    if "market" in metrics and "created" not in metrics:
+        metrics["created"] = metrics["market"]
+    return metrics
 
 
 def _report_register_worker(kwargs: dict[str, Any], status: str, items: int, note: str) -> None:
@@ -585,19 +610,77 @@ def register_market_worker_job(dry_run: bool = False, **kwargs: Any) -> dict[str
         raise RuntimeError(f"register-market/run-worker failed: {body}")
     api_result = dict(body.get("result") or {})
     trigger_started = bool(api_result.get("started") or api_result.get("already_running") or api_result.get("running"))
-    status = str(api_result.get("status") or ("ok" if trigger_started or dry_run else "warn"))
-    total = int(api_result.get("items") or 0)
+    if not trigger_started and not dry_run:
+        status = str(api_result.get("status") or "warn")
+        total = int(api_result.get("items") or 0)
+        finished_at = dt.datetime.now(dt.timezone.utc)
+        return _standard_result(
+            ok=status in {"ok", "warn", "warning"},
+            status="warn" if status in {"warn", "warning"} else status,
+            items=total,
+            metrics={"created": total},
+            note=str(api_result.get("note") or f"register_market_worker not started status={status}")[:200],
+            **{
+                "created_at": started_at.isoformat(),
+                "finished_at": finished_at.isoformat(),
+                "dry_run": bool(dry_run),
+                "cwd": str(project_dir),
+                "endpoint": _api_url("register-market/run-worker", kwargs),
+                "trigger_started": trigger_started,
+                "api_result": api_result,
+            },
+        )
+
+    if dry_run:
+        status = str(api_result.get("status") or "ok")
+        total = int(api_result.get("items") or 0)
+        worker_status = dict(api_result)
+    else:
+        worker_name = "aixec-register-market-worker-enqueue"
+        wait_timeout = int(kwargs.get("wait_timeout") or kwargs.get("register_wait_timeout") or DEFAULT_REGISTER_TIMEOUT)
+        poll_interval = int(kwargs.get("poll_interval") or kwargs.get("register_poll_interval") or 15)
+        deadline = time.monotonic() + max(1, wait_timeout)
+        worker_status: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            worker_status = _worker_status(worker_name, kwargs)
+            worker_state = str(worker_status.get("status") or "").lower()
+            if worker_state not in {"running", "queued", "starting"}:
+                break
+            time.sleep(max(1, poll_interval))
+        else:
+            raise TimeoutError(f"register_market_worker still running after {wait_timeout} seconds: {worker_status}")
+
+        status = str(worker_status.get("status") or "unknown")
+        total = int(worker_status.get("items") or 0)
+
     finished_at = dt.datetime.now(dt.timezone.utc)
+    metrics = _metrics_from_worker_status(worker_status)
+    if status not in {"ok", "warn", "warning"}:
+        return _standard_result(
+            ok=False,
+            status="down",
+            items=total,
+            metrics=metrics,
+            note=str(worker_status.get("note") or f"register_market_worker failed status={status}")[:200],
+            error=worker_status.get("note") or status,
+            **{
+                "created_at": started_at.isoformat(),
+                "finished_at": finished_at.isoformat(),
+                "dry_run": bool(dry_run),
+                "cwd": str(project_dir),
+                "endpoint": _api_url("register-market/run-worker", kwargs),
+                "trigger_started": trigger_started,
+                "api_result": api_result,
+                "worker_status": worker_status,
+            },
+        )
+
     return _standard_result(
         ok=status in {"ok", "warn", "warning"},
         status="warn" if status in {"warn", "warning"} else status,
         items=total,
-        metrics={
-            "created": int(api_result.get("created") or api_result.get("books_registered") or api_result.get("market_registered") or total or 0),
-            "updated": int(api_result.get("updated") or 0),
-            "skipped": int(api_result.get("skipped") or api_result.get("books_skipped") or api_result.get("market_skipped") or 0),
-        },
-        note=str(api_result.get("note") or f"register_market_worker status={status} items={total}")[:200],
+        metrics=metrics,
+        note=str(worker_status.get("note") or f"register_market_worker status={status} items={total}")[:200],
         **{
             "created_at": started_at.isoformat(),
             "finished_at": finished_at.isoformat(),
@@ -607,5 +690,6 @@ def register_market_worker_job(dry_run: bool = False, **kwargs: Any) -> dict[str
             "created": total,
             "trigger_started": trigger_started,
             "api_result": api_result,
+            "worker_status": worker_status,
         },
     )
