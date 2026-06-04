@@ -282,11 +282,14 @@ def fetch_items(keyword, genre_id="", hits=10, page=1, sort="standard"):
             if exc.code in (403, 429) and genre_id:
                 print("  genre_search_fallback keyword=%s genre_id=%s http=%s" % (keyword, genre_id, exc.code), flush=True)
                 return fetch_items(keyword, genre_id="", hits=hits, page=page, sort=sort)
-            if exc.code == 429 and attempt < 4:
+            if exc.code in (429, 502, 503, 504) and attempt < 4:
                 wait = DEFAULT_DELAY * attempt
-                print("  rate_limit wait=%ss keyword=%s" % (wait, keyword), flush=True)
+                print("  rakuten_retry http=%s wait=%ss keyword=%s page=%s" % (exc.code, wait, keyword, page), flush=True)
                 time.sleep(wait)
                 continue
+            if exc.code in (502, 503, 504):
+                print("  rakuten_skip http=%s keyword=%s page=%s detail=%s" % (exc.code, keyword, page, detail[:160]), flush=True)
+                return []
             raise RuntimeError("Rakuten API HTTP %s: %s" % (exc.code, detail[:300]))
         except URLError as exc:
             if attempt < 4:

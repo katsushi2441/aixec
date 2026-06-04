@@ -71,7 +71,12 @@ def collect_candidates(task, hits=30, pages=2, delay=4.0, max_candidates=1200):
     for keyword in keywords:
         for page in range(1, pages + 1):
             print("fetch keyword=%s page=%s" % (keyword, page), flush=True)
-            items = market.fetch_items(keyword, genre_id=genre_id, hits=hits, page=page)
+            try:
+                items = market.fetch_items(keyword, genre_id=genre_id, hits=hits, page=page)
+            except Exception as exc:
+                print("fetch_skip keyword=%s page=%s error=%s" % (keyword, page, str(exc)[:200]), flush=True)
+                time.sleep(delay)
+                continue
             for item in items:
                 code = item.get("item_code")
                 if not code or code in seen:
