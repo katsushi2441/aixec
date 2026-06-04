@@ -32,6 +32,9 @@ _worker_status_lock = threading.Lock()
 _response_cache_lock = threading.Lock()
 _response_cache = {}
 _RESPONSE_CACHE_MAX = 512
+_lp_generation_lock = threading.Lock()
+_lp_generation_active = set()
+_LP_GENERATION_MAX = int(os.environ.get("AIXEC_LP_GENERATION_MAX", "0") or "0")
 ALLOWED_WORKER_NAMES = {
     "url2ai-polymarket-enqueue",
     "url2ai-oss-enqueue",
@@ -844,6 +847,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "result": _load_market_pipeline_result()})
                 return
             if path == '/ollama/status':
+                cache_key = self.path
+                cached = _cache_get(cache_key, ttl=60)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
                 results = []
                 for srv in OLLAMA_SERVERS:
                     try:
@@ -856,7 +864,9 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as e:
                         results.append({"name": srv["name"], "url": srv["url"],
                                         "status": "down", "error": str(e)})
-                self.send_json({"ok": True, "servers": results})
+                payload = {"ok": True, "servers": results}
+                _cache_set(cache_key, payload, ttl=60)
+                self.send_json(payload)
                 return
             if path == '/schedule':
                 schedule = _load_schedule_from_hermes() or {
@@ -868,12 +878,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "schedule": schedule})
                 return
             if path == '/books/ranking':
+                cache_key = self.path
+                cached = _cache_get(cache_key, ttl=300)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
                 genre_id = qs.get('genre_id', [''])[0]
                 hits     = qs.get('hits',     ['20'])[0]
                 sort     = qs.get('sort',     ['sales'])[0]
                 keyword  = qs.get('keyword',  [''])[0]
                 result = search_rakuten_books(genre_id=genre_id, hits=hits, sort=sort, keyword=keyword)
-                self.send_json({'ok': True, 'genre_id': genre_id, 'result': result})
+                payload = {'ok': True, 'genre_id': genre_id, 'result': result}
+                _cache_set(cache_key, payload, ttl=300)
+                self.send_json(payload)
                 return
             if path == '/rakuten/search':
                 keyword = (qs.get('keyword', qs.get('q', ['']))[0] or '').strip()
@@ -979,6 +996,12 @@ class Handler(BaseHTTPRequestHandler):
                     attrs = {r['attr_name']: r['attr_value'] for r in conn.execute(
                         "SELECT attr_name, attr_value FROM product_attributes WHERE product_id=?", (product['id'],)
                     ).fetchall()}
+                with _lp_generation_lock:
+                    if len(_lp_generation_active) >= _LP_GENERATION_MAX:
+                        self.send_json({'ok': True, 'status': 'busy', 'message': 'lp generation queue is full'})
+                        return
+                    _lp_generation_active.add(product_id)
+                lock_file.write_text('generating')
                 description = attrs.get('book_description_openbd') or attrs.get('book_description_google') or ''
                 author = attrs.get('book_openbd_author') or attrs.get('book_google_authors') or product.get('maker', '')
                 publisher = attrs.get('book_openbd_publisher') or attrs.get('book_google_publisher') or ''
@@ -1012,7 +1035,6 @@ class Handler(BaseHTTPRequestHandler):
                 # バックグラウンドスレッドで生成
                 pid = product['id']
                 def generate():
-                    lock_file.write_text('generating')
                     try:
                         payload = json.dumps({'model': ollama_model, 'prompt': prompt, 'stream': False,
                                               'options': {'temperature': 0.7, 'num_predict': 5000}}).encode('utf-8')
@@ -1039,6 +1061,8 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         cache_file.write_text('<p>生成エラー: ' + str(exc)[:200] + '</p>', encoding='utf-8')
                     finally:
+                        with _lp_generation_lock:
+                            _lp_generation_active.discard(product_id)
                         lock_file.unlink(missing_ok=True)
                 threading.Thread(target=generate, daemon=True).start()
                 self.send_json({'ok': True, 'status': 'generating'})
@@ -1112,6 +1136,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': True, 'found': bool(result), 'product': result})
                 return
             if path == '/posts':
+                cache_key = self.path
+                cached = _cache_get(cache_key, ttl=10)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
                 limit  = min(100, max(1, int(qs.get('limit',  ['20'])[0])))
                 offset = max(0, int(qs.get('offset', ['0'])[0]))
                 author = (qs.get('author', [''])[0] or '').strip()
@@ -1126,7 +1155,9 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         rows  = conn.execute('SELECT * FROM posts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
                         total = conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0]
-                self.send_json({'ok': True, 'items': [row_dict(r) for r in rows], 'total': total})
+                payload = {'ok': True, 'items': [row_dict(r) for r in rows], 'total': total}
+                _cache_set(cache_key, payload, ttl=10)
+                self.send_json(payload)
                 return
             if path.startswith('/posts/'):
                 post_id = path.split('/', 2)[2]
