@@ -60,6 +60,8 @@ def collect_candidates(task, hits=30, pages=2, delay=4.0, max_candidates=1200):
     seen = set()
     candidates = []
     keywords = task.get("keywords") or []
+    min_price = int(task.get("min_price") or 0)
+    max_price = int(task.get("max_price") or 0)
     raw_genre_id = task.get("genre_id") or ""
     # 楽天ブックスAPI形式(001xxxxxx)は市場検索APIに使えない(上限999999)→空にする
     try:
@@ -78,6 +80,15 @@ def collect_candidates(task, hits=30, pages=2, delay=4.0, max_candidates=1200):
                 time.sleep(delay)
                 continue
             for item in items:
+                price = item.get("price") or 0
+                try:
+                    price = int(price)
+                except (TypeError, ValueError):
+                    price = 0
+                if min_price and price < min_price:
+                    continue
+                if max_price and price > max_price:
+                    continue
                 code = item.get("item_code")
                 if not code or code in seen:
                     continue
@@ -134,8 +145,20 @@ def heuristic_score(item, task):
                 score += 8
     if item.get("review_count") and str(item["review_count"]).isdigit():
         score += min(15, int(item["review_count"]) // 20)
-    if item.get("price"):
+    price = item.get("price") or 0
+    try:
+        price = int(price)
+    except (TypeError, ValueError):
+        price = 0
+    min_price = int(task.get("min_price") or 0)
+    if price:
         score += 5
+    if min_price and price >= min_price:
+        score += 8
+    if price >= 200000:
+        score += 6
+    elif price >= 150000:
+        score += 4
     return min(score, 95)
 
 
