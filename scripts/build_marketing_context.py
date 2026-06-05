@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from collections import Counter
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse, unquote
@@ -10,6 +11,7 @@ from urllib.parse import parse_qs, urlparse, unquote
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "storage" / "aixec.sqlite"
 OUT = ROOT / "tasks" / "marketing_context.md"
+MARKET_RESULT = ROOT / "tasks" / "market_task_result.json"
 LOG_CANDIDATES = [
     ROOT / "webapps" / "access.log",
     Path("/tmp/aixec_access.log"),
@@ -50,6 +52,35 @@ def analyze_go_log():
     return "\n".join(lines)
 
 
+def recent_market_result():
+    if not MARKET_RESULT.exists():
+        return []
+    try:
+        data = json.loads(MARKET_RESULT.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return [f"- market_task_result.jsonを読めません: {exc}"]
+    label = data.get("label") or ""
+    group = data.get("group") or ""
+    selected = int(data.get("selected") or 0)
+    registered = int(data.get("registered") or 0)
+    created = int(data.get("created") or 0)
+    updated = int(data.get("updated") or 0)
+    candidates = int(data.get("candidates") or 0)
+    created_rate = (created / registered * 100.0) if registered else 0.0
+    lines = [
+        f"- 直近ジャンル: {group} ({label})",
+        f"- candidates={candidates} selected={selected} registered={registered} created={created} updated={updated}",
+        f"- 新規率: {created_rate:.1f}%",
+    ]
+    if registered >= 100 and created_rate < 20:
+        lines.append("- 判定: 新規率が低い。次回は同ジャンル・隣接ジャンルを避け、未登録または100件未満のジャンルへ切り替える。")
+    elif registered >= 100 and created_rate < 50:
+        lines.append("- 判定: 更新が多い。次回はkeywordsを変えるか、新ジャンルへ寄せる。")
+    else:
+        lines.append("- 判定: 新規登録効率は許容範囲。")
+    return lines
+
+
 def main():
     conn = sqlite3.connect(DB)
     total = conn.execute("select count(*) from products").fetchone()[0]
@@ -62,6 +93,15 @@ def main():
         group by attr_value
         order by count desc
         limit 30
+        """,
+    )
+    all_group_counts = rows(
+        conn,
+        """
+        select attr_value as group_name, count(distinct product_id) as count
+        from product_attributes
+        where attr_name='rakuten_genre_group'
+        group by attr_value
         """,
     )
     keyword_counts = rows(
@@ -86,7 +126,7 @@ def main():
     )
 
     # 登録が少ない・未登録のジャンル候補
-    registered_groups = {r['group_name'] for r in group_counts}
+    registered_groups = {r['group_name'] for r in all_group_counts}
     all_candidate_groups = [
         # 書籍系
         ("副業・フリーランス書籍", "sidejob_books"),
@@ -156,7 +196,10 @@ def main():
         ("介護用品・見守り機器", "caregiving_monitoring"),
     ]
     unregistered = [(label, gid) for label, gid in all_candidate_groups if gid not in registered_groups]
-    low_count = [(r['group_name'], r['count']) for r in group_counts if r['count'] < 100]
+    low_count = sorted(
+        [(r['group_name'], r['count']) for r in all_group_counts if r['count'] < 100],
+        key=lambda row: row[1],
+    )
 
     lines = [
         "# AIxEC Marketing Context",
@@ -169,6 +212,16 @@ def main():
         "- 件数方針: 1回のパイプラインで500件前後の商品登録を狙う。狭い書籍ジャンルより、商品母数が大きいジャンルを優先する。",
         "- 画像方針: 楽天市場商品画像は保存せず、楽天API画像URLを使う。",
         "- bot対策: ref/fromなしのgo.php直踏みは204で遮断済み。クリック評価はvalid(from/refあり)を重視する。",
+        "",
+        "## 直近market-pipeline実績",
+        *recent_market_result(),
+        "",
+        "## 自動成長ルール",
+        "- market-pipelineで更新が多く新規が少ない場合、同じジャンルを繰り返さない。",
+        "- 新規率20%未満なら、そのジャンルは飽和扱いとして次回候補から外す。",
+        "- 500件登録でcreatedが100件未満なら、keywords追加ではなく別ジャンルへ切り替える。",
+        "- growth agentは未登録ジャンル、100件未満ジャンル、Amazon送客に向いた日用品・高単価家電・季節商材を優先する。",
+        "- 直近登録したgroupは、created率が50%以上でない限り連続選定しない。",
         "",
         "## 登録済みジャンルと充足度（件数が多いほど飽和）",
     ]
@@ -209,6 +262,7 @@ def main():
         "次に攻める楽天市場商品ジャンルを1つ選び、500件程度の商品登録に向いたtask.jsonを作る。",
         "【重要】未登録ジャンルだけに固執しない。検索需要が強ければ、既存ジャンルの隣接領域や一般人気ジャンルも選んでよい。",
         "充足済み（★充足）のジャンルを選ぶ場合は、切り口が明確に違い、500件規模で新規登録できる根拠を書くこと。",
+        "直近market-pipelineの新規率が低い場合は、同じgroupや同系統keywordsを選ばず、未開拓ジャンルを選ぶこと。",
         "AIxECの文脈に無理やり寄せるより、アクセス増につながる需要を優先し、その上で記事化・SNS化・動画化できる切り口を作る。",
     ]
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -86,7 +86,14 @@ def main():
     parser.add_argument(
         "--allow-market-registration",
         action="store_true",
-        help="allow growth plan market_registration actions to run the market pipeline",
+        default=True,
+        help="allow growth plan market_registration actions to run the market pipeline (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-market-registration",
+        action="store_false",
+        dest="allow_market_registration",
+        help="observe and plan only; do not execute market_registration actions",
     )
     args = parser.parse_args()
     acquire()

@@ -17,6 +17,11 @@
     "group": {"type": "string", "pattern": "^[a-z0-9_]+$"},
     "target_count": {"type": "integer", "minimum": 1, "maximum": 1000},
     "genre_id": {"type": "string"},
+    "affiliate_priority": {
+      "type": "string",
+      "enum": ["", "rakuten", "amazon"],
+      "description": "Amazon送客を優先するジャンルはamazon"
+    },
     "keywords": {
       "type": "array",
       "minItems": 3,
@@ -35,4 +40,3 @@
     }
   }
 }
-

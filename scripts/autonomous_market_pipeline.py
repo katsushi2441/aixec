@@ -22,6 +22,7 @@ LOG_DIR = ROOT / "storage" / "autonomous"
 LOCK_PATH = ROOT / "storage" / "autonomous_market_pipeline.lock"
 TASK_PATH = ROOT / "tasks" / "market_task.generated.json"
 RESULT_PATH = ROOT / "tasks" / "market_task_result.json"
+DRY_RESULT_PATH = ROOT / "tasks" / "market_task_dry_run_result.json"
 API_BASE = os.environ.get("AIXEC_API_BASE", "http://127.0.0.1:8081")
 
 
@@ -191,7 +192,10 @@ def main():
         run_step(worker_cmd, timeout=None)
 
         task = json.loads(TASK_PATH.read_text(encoding="utf-8"))
-        result = json.loads(RESULT_PATH.read_text(encoding="utf-8"))
+        result_path = DRY_RESULT_PATH if args.dry_run else RESULT_PATH
+        if not result_path.exists():
+            raise RuntimeError("result not found: %s" % result_path)
+        result = json.loads(result_path.read_text(encoding="utf-8"))
         registered = int(result.get("registered") or 0)
         created = int(result.get("created") or 0)
         updated = int(result.get("updated") or 0)
