@@ -143,6 +143,7 @@ $tabs = array(
     'beauty_cosmetics' => array('label' => '美容・コスメ', 'lead' => '楽天市場から取得した美容・コスメ商品'),
     'supplements' => array('label' => 'サプリ', 'lead' => '楽天市場から取得したサプリメント商品'),
     'portable_power_outdoor_appliances' => array('label' => 'ポータブル電源・防災電源', 'lead' => 'ポータブル電源、家庭用蓄電池、車中泊家電、発電機、大型UPSなどの高額商材'),
+    'offgrid_power_inverters' => array('label' => '独立電源・インバーター', 'lead' => '電菱、未来舎、Renogy、Victron、EcoFlow、Jackeryなどのインバーター、コンバーター、バッテリー、太陽光パネル'),
     'amazon_daily_consumables' => array('label' => 'Amazon日用品・飲料・消耗品', 'lead' => '飲料水、炭酸水、プロテイン、洗剤、衛生用品、日用品などAmazonで買われやすい消耗品'),
     'ai_pc_gaming' => array('label' => 'AI PC・ゲーミング', 'lead' => 'GPU、ゲーミングPC、ミニPC、配信機材、PC周辺機器'),
     'model_number_products' => array('label' => '型番商品・工具機器', 'lead' => '工具、測定器、PC周辺機器、家電など型番で探されやすい商品'),
