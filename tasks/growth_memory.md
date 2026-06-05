@@ -538,3 +538,72 @@ AIxEC Growth Agentが、過去の観察・判断・実行結果を蓄積する�
 - sns_post id=7472
 - content_idea 職人目線×AIxEC防犯カメラDIY設置完全ガイド2026：PoEカメラ配線×タジマ工具×AI監視システム選び方
 
+
+## Cycle 2026-06-05 15:04:31
+
+- summary: 今サイクルは security_cameras（4サイクル連続 skipped）を断念し outdoor_camping に切り替え試行。全10新規ジャンルがMarket Groups未反映（最長5日超）であり広域パイプライン障害として確定。SNS は oss/finreport 型統一。タジマ工具 valid click ユーザー（職人層）向けに夏季コンテンツで有機流入を狙う。
+- strategy: 【今サイクルの判断根拠】
+
+1. market_registration を outdoor_camping に切り替える理由:
+   - security_cameras は4サイクル連続で "skipped separate pipeline" となっており、同じジャンル名を繰り返してもパイプライン側で弾かれ続ける可能性が高い
+   - outdoor_camping はメモリ上「06-02登録」と記録されているが、Marketing Context の「未登録ジャンル」欄に依然 0件として残存 → 実際には未執行（silent skip）だった可能性が高い
+   - 6月はキャンプ・アウトドア需要の最盛期。offgrid_power_inverters(500件) + portable_power_outdoor_appliances(698件) との内部リンクで既存資産を活用できる
+   - Amazon 送客にも向いている（テント・バーナー・クーラーボックスは Amazon 購入率が高い）
+
+2. パイプライン障害の確定観察:
+   - cooling_workwear(05-31登録→06-02反映・2.5日) を正常ケースとして、kitchen_tools/pet_supplies(06-01・5日超・0件) は明らかに逸脱
+   - 06-01〜06-04 登録の全10ジャンルが一切 Market Groups に反映されていない
+   - 「skipped separate pipeline」と明示されたケース以外も silent skip されている可能性が高い
+   - observe_only で継続観察し、次サイクルで未解消なら worker.py の group_name INSERT 処理を実地調査に移行
+
+3. SNS 戦略:
+   - buzblogger廃止確定(views=0が4サイクル連続)
+   - register型も廃止(views=0)
+   - oss/kurage/polymarket/finreport型がviews=1-2で安定
+   - t.co=5 が唯一の SNS 有効経路 → 投稿コンテンツの質よりも投稿タイプ(oss/kurage系)が重要
+   - タジマ工具 valid click ユーザー(職人層)向けコンテンツを続けることで t.co 経路からの流入維持
+
+4. content_idea:
+   - outdoor_camping(新規) + offgrid_power_inverters(500件) + disaster_prevention(未登録・将来候補) の三軸複合記事
+   - 「夏キャンプ×防災×オフグリッド電源」は AIxEC の専門性と完全合致し、成分比較型と同様の解説コンテンツ化が可能
+   - 既存登録商品(portable_power: 698件, offgrid: 500件)をそのまま活用できるため、pipeline 修復待ちでも記事資産として機能する
+- memory_note: 2026-06-05 昼サイクル: outdoor_camping(500件)に切り替え(security_cameras=4サイクル連続 skipped)。観察データ確認: outdoor_campingはメモリ上「06-02登録」記録だが Marketing Context では依然0件未登録として残存 → 06-02の「登録」も実際は silent skip だった可能性が高い。【パイプライン障害確定】06-01〜06-04登録の全10ジャンルが Market Groups 未反映(最長5日超)で广域障害と確定。次サイクルで未解消なら worker.py group_name INSERT 処理を実地調査へ移行。SNS戦略: buzblogger廃止確定(4サイクル連続views=0)・register廃止(views=0)・oss/kurage/polymarket/finreport型=views=1-2で安定継続。タジマ工具 valid click 80%占有継続(305/381)。
+
+- market_registration returncode=0 limit=20
+- sns_post id=7504
+- content_idea outdoor_camping(新規) + offgrid_power_inverters(500件) + portable_power_outdoor_appliances(698件)の三軸複合記事。disaster_prevention(未登録・次候補)との接続点も作成。既存商品DBを即時活用可能で pipeline 修復待ち中も記事資産が機能する。AIxEC専門性(AI選定比較)と季節需要が合致。
+- observe_only
+
+## Cycle 2026-06-06 03:03:29
+
+- summary: outdoor_camping(528件)の< 24h反映でパイプライン正常稼働確定。diy_tools(06-03登録・3日超・0件)をsilent skip判定し再登録。タジマ工具valid click 80%占有の職人層ユーザーへの最隣接ジャンルとして今サイクルの最優先アクション。SNSはfinreport型継続。kitchen_tools等(06-01登録・5日超)の異常遅延は継続観察。
+- strategy: 【判断根拠】
+
+1. **パイプライン正常稼働確定**: outdoor_camping(06-05 昼 returncode=0)が < 24時間で528件に反映。これにより 06-01〜06-04 登録の0件継続は「pipeline障害」ではなく「silent skip」または「group_name mapping不一致」によるものと判明。
+
+2. **diy_tools 再登録の根拠**: 
+   - 06-03 morning 登録記録あるが3日超で0件 → outdoor_camping < 24h反映と比べ明らかに異常 → silent skip 確定
+   - タジマ工具 valid click 80%占有（SF-MFTHLD=162, SFDK-JKCB=143 = 305/381 valid clicks）の職人層ユーザーが最も望む隣接ジャンル
+   - measuring_tools(712件)との内部リンクで自然な回遊経路を構成
+   - アフィリエイト単価が高い（マキタ・ハイコーキ・Bosch 数万円〜）
+   - 500件登録ターゲット: インパクトドライバー・電動丸のこ・充電式ドリル等で楽天市場の母数十分
+
+3. **SNS finreport型継続**: register型/buzblogger型はviews=0廃止確定。t.co=5が唯一のSNS有効経路。finreport型でタジマ工具職人層向けコンテンツ（マキタ vs ハイコーキ比較等）が適合。
+
+4. **content_idea**: diy_tools × measuring_tools(712件) × security_cameras(未登録・次候補)三軸で aiknowledgecms → AIxEC → go.php の導線強化。タジマ工具ユーザーの行動パターン（計測器 → 電動工具 → 現場管理）に沿った自然設計。
+
+5. **observe_only**: kitchen_tools/pet_supplies/energy_saving_appliances(06-01・5日超・0件)は outdoor_camping 反映速度比で明らかな異常。group_name mapping の実地確認が急務。
+- memory_note: 2026-06-06サイクル: outdoor_camping 528件反映確認(<24h・パイプライン正常稼働確定・新規28件/更新472件)。diy_tools(06-03 morning登録・3日超0件)をsilent skip判定し再登録実行。measuring_tools(712件)タジマ工具valid click 80%職人層の最隣接ジャンル・高単価アフィリエイト期待。【pending継続観察】kitchen_tools等(06-01登録・5日超・0件)異常継続→次サイクル未解消でgroup_name mapping実地確認へ移行。SNS: finreport型継続(register/buzblogger廃止)。
+
+- market_registration returncode=0 limit=20
+- sns_post id=7634
+- content_idea タジマ工具valid click 80%ユーザー(職人層)の行動パターン「計測器→電動工具→現場管理」に沿った三軸記事設計。aiknowledgecms→AIxEC商品ページ→go.php rakuten/amazonの転換導線最大化。
+- observe_only
+
+## Manual Correction 2026-06-06 08:41
+
+- issue: market-pipeline が diy_tools で 19件しか登録できなかった。
+- cause: `tasks/market_task.generated.json` の keywords が `["diy_tools"]` だけになっており、楽天検索語として成立していなかった。実ジャンル名と検索キーワードが混同された。
+- action: task を `生活家電・大型家電 / home_appliances` に手動差し替え。冷蔵庫、洗濯機、ドラム式洗濯機、エアコン、窓用エアコン、スポットクーラー、除湿機、食洗機、電子レンジ、炊飯器、掃除機、空気清浄機、テレビなど実検索語を設定。
+- result: RQDB4AI job `bae866c8-6deb-49e0-bfd3-534e83ff7555` succeeded. selected=500 / registered=500 / created=493 / updated=7.
+- lesson: market-pipeline は group 名を検索語にしてはいけない。500件登録できるまで、実キーワードが豊富な別ジャンルへ切り替えて再試行する。
