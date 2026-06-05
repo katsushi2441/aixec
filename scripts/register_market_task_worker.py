@@ -363,6 +363,7 @@ def main():
         "label": task["label"],
         "group": task["group"],
         "genre_id": task.get("genre_id") or "",
+        "affiliate_priority": task.get("affiliate_priority") or "",
     }
     registered = []
     for item in selected:

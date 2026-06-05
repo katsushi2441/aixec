@@ -50,9 +50,13 @@ function clean_keyword_part($value) {
 }
 
 function affiliate_keyword($item) {
+    $model_raw = !empty($item['model_number']) ? (string)$item['model_number'] : '';
+    if (strpos($model_raw, ':') !== false && !empty($item['name'])) {
+        return clean_keyword_part($item['name']);
+    }
     $parts = array();
     if (!empty($item['maker'])) $parts[] = clean_keyword_part($item['maker']);
-    $model = !empty($item['model_number']) ? display_model_number($item['model_number']) : '';
+    $model = $model_raw !== '' ? display_model_number($model_raw) : '';
     if ($model !== '') $parts[] = $model;
     if (!$parts && !empty($item['name'])) $parts[] = clean_keyword_part($item['name']);
     return trim(implode(' ', $parts));
@@ -65,6 +69,17 @@ function rakuten_click_url($item) {
     if (!empty($item['id'])) $params['pid'] = $item['id'];
     if (!empty($item['model_number'])) $params['model'] = display_model_number($item['model_number']);
     if (!empty($item['jan'])) $params['jan'] = preg_replace('/\D/', '', $item['jan']);
+    return '/go.php?' . http_build_query($params);
+}
+
+function amazon_click_url($item) {
+    $kw = affiliate_keyword($item);
+    if ($kw === '') $kw = isset($item['name']) ? $item['name'] : 'Amazon';
+    $params = array('to' => 'amazon', 'kw' => $kw, 'from' => 'market_ranking:' . (isset($_GET['tab']) ? $_GET['tab'] : ''));
+    if (!empty($item['id'])) $params['pid'] = $item['id'];
+    if (!empty($item['model_number'])) $params['model'] = display_model_number($item['model_number']);
+    if (!empty($item['jan'])) $params['jan'] = preg_replace('/\D/', '', $item['jan']);
+    if (!empty($item['asin'])) $params['asin'] = $item['asin'];
     return '/go.php?' . http_build_query($params);
 }
 
@@ -128,6 +143,7 @@ $tabs = array(
     'beauty_cosmetics' => array('label' => '美容・コスメ', 'lead' => '楽天市場から取得した美容・コスメ商品'),
     'supplements' => array('label' => 'サプリ', 'lead' => '楽天市場から取得したサプリメント商品'),
     'portable_power_outdoor_appliances' => array('label' => 'ポータブル電源・防災電源', 'lead' => 'ポータブル電源、家庭用蓄電池、車中泊家電、発電機、大型UPSなどの高額商材'),
+    'amazon_daily_consumables' => array('label' => 'Amazon日用品・飲料・消耗品', 'lead' => '飲料水、炭酸水、プロテイン、洗剤、衛生用品、日用品などAmazonで買われやすい消耗品'),
     'ai_pc_gaming' => array('label' => 'AI PC・ゲーミング', 'lead' => 'GPU、ゲーミングPC、ミニPC、配信機材、PC周辺機器'),
     'model_number_products' => array('label' => '型番商品・工具機器', 'lead' => '工具、測定器、PC周辺機器、家電など型番で探されやすい商品'),
     'celebrity_books' => array('label' => '芸能人・有名人の本', 'lead' => 'テレビやSNSで気になった人物を、エッセイ・自伝・写真集・評伝で深掘りする書籍'),
@@ -249,6 +265,7 @@ a{color:inherit}
         $img = !empty($item['image_url']) ? $item['image_url'] : '/images/noimage.jpg';
         $detail_url = product_url($item);
         $rakuten_url = rakuten_click_url($item);
+        $amazon_url = amazon_click_url($item);
         $model = !empty($item['model_number']) ? display_model_number($item['model_number']) : '';
     ?>
     <article class="card">
@@ -262,7 +279,8 @@ a{color:inherit}
         <div class="price"><?php echo h(yen(isset($item['sale_price']) ? $item['sale_price'] : '')); ?></div>
         <div class="actions">
           <a class="btn" href="<?php echo h($detail_url); ?>">商品を見る</a>
-          <a class="btn primary" href="<?php echo h($rakuten_url); ?>" target="_blank" rel="nofollow sponsored noopener">楽天で見る</a>
+          <a class="btn primary" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener">Amazonで見る</a>
+          <a class="btn" href="<?php echo h($rakuten_url); ?>" target="_blank" rel="nofollow sponsored noopener">楽天で見る</a>
         </div>
       </div>
     </article>

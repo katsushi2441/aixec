@@ -1233,7 +1233,12 @@ class Handler(BaseHTTPRequestHandler):
                 label = (task.get("label") or "AIxEC商品").strip()
                 group = (task.get("group") or "market_products").strip()
                 genre_id = str(task.get("genre_id") or "").strip()
-                category = {"label": label, "group": group, "genre_id": genre_id}
+                category = {
+                    "label": label,
+                    "group": group,
+                    "genre_id": genre_id,
+                    "affiliate_priority": str(task.get("affiliate_priority") or ""),
+                }
 
                 result_items = []
                 registered = created = updated = skipped = 0
@@ -1344,7 +1349,12 @@ class Handler(BaseHTTPRequestHandler):
                             continue
                         label = (raw.get("category_label") or raw.get("label") or "楽天市場商品").strip()
                         group = (raw.get("category_group") or raw.get("group") or "market_products").strip()
-                        category = {"label": label, "group": group, "genre_id": str(raw.get("genre_id") or "")}
+                        category = {
+                            "label": label,
+                            "group": group,
+                            "genre_id": str(raw.get("genre_id") or ""),
+                            "affiliate_priority": str(raw.get("affiliate_priority") or ""),
+                        }
                         item_code = raw.get("item_code") or ""
                         jan = raw.get("jan") or ""
                         if dry_run:

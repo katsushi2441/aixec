@@ -126,9 +126,13 @@ function absolute_site_url($url) {
 
 function current_affiliate_keyword($q, $detail) {
     if (is_array($detail) && !empty($detail)) {
+        $model_raw = !empty($detail['model_number']) ? (string)$detail['model_number'] : '';
+        if (strpos($model_raw, ':') !== false && !empty($detail['name'])) {
+            return clean_affiliate_keyword_part($detail['name']);
+        }
         $parts = array();
         if (!empty($detail['maker'])) $parts[] = clean_affiliate_keyword_part($detail['maker']);
-        $display_model = !empty($detail['model_number']) ? display_model_number($detail['model_number']) : '';
+        $display_model = $model_raw !== '' ? display_model_number($model_raw) : '';
         if ($display_model !== '') $parts[] = $display_model;
         $keyword = trim(implode(' ', $parts));
         if ($keyword !== '') return $keyword;
@@ -279,6 +283,8 @@ $genre_links = array(
     array('label' => 'トレカ', 'q' => 'トレカ'),
     array('label' => '美容・コスメ', 'q' => '美容 コスメ'),
     array('label' => 'サプリ', 'q' => 'サプリ'),
+    array('label' => 'Amazon日用品・飲料', 'q' => '水 炭酸水 洗剤 日用品 まとめ買い'),
+    array('label' => '消耗品・まとめ買い', 'q' => 'トイレットペーパー ティッシュ 洗剤 まとめ買い'),
     array('label' => 'ポータブル電源・防災電源', 'q' => 'ポータブル電源 防災 電源 家庭用蓄電池'),
     array('label' => '車中泊・キャンプ電源', 'q' => '車中泊 ポータブル電源 キャンプ 電源'),
     array('label' => 'インバーター発電機・大型UPS', 'q' => 'インバーター発電機 UPS 3000VA'),

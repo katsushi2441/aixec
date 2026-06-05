@@ -401,16 +401,16 @@ def upload_image(rel_path):
     return True
 
 
-def go_url(item):
+def go_url(item, provider="rakuten"):
     params = {
-        "to": "rakuten",
+        "to": provider,
         "kw": item.get("name") or item.get("keyword") or "楽天市場",
     }
     if item.get("jan"):
         params["jan"] = item["jan"]
     if item.get("item_code"):
         params["model"] = item["item_code"]
-    if item.get("affiliate_url"):
+    if provider == "rakuten" and item.get("affiliate_url"):
         params["url"] = item["affiliate_url"]
     return "/go.php?" + urlencode(params)
 
@@ -424,13 +424,26 @@ def build_description(item, category, local_image):
     caption = html.escape(raw_caption)
     shop = html.escape(item.get("shop_name") or "")
     genre = html.escape(category["label"])
-    rakuten = html.escape(go_url(item), quote=True)
-    parts = [
-        '<p style="margin-bottom:16px; padding:12px; background:#fff7f7; border:1px solid #bf0000; border-radius:4px;">'
-        '<a href="%s" target="_blank" rel="nofollow sponsored noopener" style="color:#bf0000; font-weight:bold;">楽天市場でこの商品を見る →</a><br>'
-        '<span style="font-size:0.9em; color:#555;">楽天市場の商品ページで価格・在庫・レビューをご確認ください。</span>'
-        '</p>' % rakuten
-    ]
+    rakuten = html.escape(go_url(item, "rakuten"), quote=True)
+    amazon = html.escape(go_url(item, "amazon"), quote=True)
+    prefer_amazon = (category.get("affiliate_priority") or "").lower() == "amazon"
+    if prefer_amazon:
+        parts = [
+            '<p style="margin-bottom:16px; padding:14px; background:#fff8e8; border:2px solid #ff9900; border-radius:4px;">'
+            '<a href="%s" target="_blank" rel="nofollow sponsored noopener" style="color:#b45309; font-weight:bold; font-size:1.05em;">Amazonでこの商品を探す →</a><br>'
+            '<span style="font-size:0.9em; color:#555;">Amazonで価格・在庫・定期便・まとめ買い条件をご確認ください。</span>'
+            '</p>'
+            '<p style="margin-bottom:14px;">'
+            '<a href="%s" target="_blank" rel="nofollow sponsored noopener" style="color:#bf0000; font-weight:bold;">楽天市場でも確認する →</a>'
+            '</p>' % (amazon, rakuten)
+        ]
+    else:
+        parts = [
+            '<p style="margin-bottom:16px; padding:12px; background:#fff7f7; border:1px solid #bf0000; border-radius:4px;">'
+            '<a href="%s" target="_blank" rel="nofollow sponsored noopener" style="color:#bf0000; font-weight:bold;">楽天市場でこの商品を見る →</a><br>'
+            '<span style="font-size:0.9em; color:#555;">楽天市場の商品ページで価格・在庫・レビューをご確認ください。</span>'
+            '</p>' % rakuten
+        ]
     if local_image:
         parts.append('<p><img src="%s" alt="%s" style="max-width:100%%;"></p>' % (html.escape(local_image), name))
     parts.append("<p><strong>%s</strong></p>" % name)
@@ -507,7 +520,7 @@ def upsert_product(item, category, upload=False):
         "amazon_url": None,
         "rakuten_url": item.get("affiliate_url") or item.get("item_url"),
         "own_store_url": None,
-        "affiliate_priority": "rakuten",
+        "affiliate_priority": category.get("affiliate_priority") or "rakuten",
         "status": "active",
     }
     with connect() as conn:
