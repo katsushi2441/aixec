@@ -222,3 +222,34 @@ python3 scripts/register_market_task_worker.py \
 5. AmazonのSalesRankやBrowseNodeが使えるなら、Amazon候補を優先スコアリングする。
 
 大量掲載を狙う場合も、いきなり500件登録ではなく、カテゴリごとに20〜50件で開始する。
+
+## 2026-06-05 Read-only Test Result
+
+追加したread-onlyクライアント:
+
+```text
+scripts/amazon_creators_client.py
+```
+
+Python 3.12 + `creators` packageで、v3.3認証情報を使った検索リクエストまでは実行できた。
+
+実行例:
+
+```bash
+uv run --python 3.12 --with creators \
+  python scripts/amazon_creators_client.py search \
+  --keywords "RTX 5090 グラフィックボード" \
+  --limit 5 \
+  --min-price 50000 \
+  --sort-enum FEATURED
+```
+
+結果:
+
+```text
+AssociateNotEligible
+```
+
+これはキー形式やSDK呼び出し以前の問題ではなく、Amazon側が現在のアソシエイトアカウントをCreators API利用条件未達と判定している状態。
+
+Amazon側でCreators API eligibilityが有効になったら、同じコマンドで再テストする。
