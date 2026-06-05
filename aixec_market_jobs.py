@@ -469,6 +469,220 @@ def _generate_market_candidates(task: dict[str, Any], dry_run: bool, kwargs: dic
     return {"payload": output, "output_path": str(output_path)}
 
 
+def _list_arg(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _generate_register_market_payload(dry_run: bool, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Build books + market candidate JSON without touching the production DB."""
+    project_dir = _project_dir()
+    import sys
+
+    scripts_dir = project_dir / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        import import_rakuten_market_products as market_import  # type: ignore
+        import register_ranking_books as book_import  # type: ignore
+    finally:
+        try:
+            sys.path.remove(str(scripts_dir))
+        except ValueError:
+            pass
+
+    book_hits = int(kwargs.get("book_hits") or kwargs.get("books_hits") or (3 if dry_run else 20))
+    market_hits = int(kwargs.get("market_hits") or kwargs.get("hits") or (3 if dry_run else 10))
+    book_delay = float(kwargs.get("book_delay") or (0.2 if dry_run else os.environ.get("RAKUTEN_BOOKS_TAB_DELAY", "10.0")))
+    market_delay = float(kwargs.get("market_delay") or kwargs.get("delay") or (0.2 if dry_run else os.environ.get("RAKUTEN_MARKET_IMPORT_DELAY", "6.0")))
+
+    book_groups = _list_arg(kwargs.get("book_groups") or kwargs.get("books_groups"))
+    book_labels = _list_arg(kwargs.get("book_labels") or kwargs.get("books_labels"))
+    market_categories = _list_arg(kwargs.get("market_categories") or kwargs.get("categories") or kwargs.get("category"))
+
+    book_tabs = book_import.selected_tabs(groups=book_groups, labels=book_labels)
+    market_cats = market_import.selected_categories(market_categories)
+
+    if dry_run:
+        max_book_tabs = int(kwargs.get("max_book_tabs") or 2)
+        max_market_categories = int(kwargs.get("max_market_categories") or 2)
+        book_tabs = book_tabs[:max_book_tabs]
+        market_cats = market_cats[:max_market_categories]
+
+    env = book_import.load_env()
+    market_import.load_env()
+
+    books: list[dict[str, Any]] = []
+    market_items: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+
+    for idx, tab in enumerate(book_tabs):
+        if idx > 0 and book_delay > 0:
+            time.sleep(book_delay)
+        try:
+            fetched = book_import.fetch_books(env, tab.get("genre_id") or "", tab.get("keyword") or "", hits=book_hits)
+        except Exception as exc:
+            failures.append({"source": "books", "label": tab.get("label"), "error": str(exc)[:300]})
+            continue
+        for book in fetched:
+            if book.get("title"):
+                books.append(_book_candidate_payload(book, tab))
+
+    for cat in market_cats:
+        seen_codes: set[str] = set()
+        for keyword in cat.get("keywords") or []:
+            try:
+                fetched = market_import.fetch_items(keyword, genre_id=cat.get("genre_id") or "", hits=market_hits)
+            except Exception as exc:
+                failures.append({"source": "market", "label": cat.get("label"), "keyword": keyword, "error": str(exc)[:300]})
+                if market_delay > 0:
+                    time.sleep(market_delay)
+                continue
+            for item in fetched:
+                code = item.get("item_code") or ""
+                if not code or code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                market_items.append(_market_candidate_payload(item, cat))
+            if market_delay > 0:
+                time.sleep(market_delay)
+
+    payload = {
+        "project": "aixec",
+        "app": "register_market",
+        "dry_run": bool(dry_run),
+        "source": str(kwargs.get("source") or "rqdb4ai"),
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "books": books,
+        "market_items": market_items,
+        "counts": {
+            "book_tabs": len(book_tabs),
+            "market_categories": len(market_cats),
+            "books": len(books),
+            "market_items": len(market_items),
+            "failures": len(failures),
+        },
+        "failures": failures[:100],
+    }
+    if kwargs.get("skip_sns"):
+        payload["skip_sns"] = True
+
+    output_path = project_dir / "tasks" / ("register_market_run_once_dry_run.json" if dry_run else "register_market_run_once.json")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"payload": payload, "output_path": str(output_path)}
+
+
+def _submit_register_market_run_once(payload: dict[str, Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    books = list(payload.get("books") or [])
+    market_items = list(payload.get("market_items") or [])
+    book_chunk_size = int(kwargs.get("book_chunk_size") or kwargs.get("books_chunk_size") or 1)
+    market_chunk_size = int(kwargs.get("market_chunk_size") or 5)
+    timeout = int(kwargs.get("submit_timeout") or DEFAULT_REGISTER_TIMEOUT)
+    chunk_retries = int(kwargs.get("chunk_retries") or 3)
+
+    jobs: list[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]] = []
+    for index, chunk in enumerate(_chunks(books, book_chunk_size), 1):
+        jobs.append((f"books:{index}", chunk, []))
+    for index, chunk in enumerate(_chunks(market_items, market_chunk_size), 1):
+        jobs.append((f"market:{index}", [], chunk))
+    if not jobs:
+        jobs.append(("empty:1", [], []))
+
+    aggregate = {
+        "dry_run": bool(payload.get("dry_run")),
+        "source": payload.get("source") or "rqdb4ai",
+        "books_received": 0,
+        "market_received": 0,
+        "books_registered": 0,
+        "market_registered": 0,
+        "books_skipped": 0,
+        "market_skipped": 0,
+        "items": 0,
+        "status": "ok",
+        "book_items": [],
+        "market_items": [],
+        "sns_post_ids": [],
+        "chunks": [],
+    }
+    total_jobs = len(jobs)
+    for index, (label, book_chunk, market_chunk) in enumerate(jobs, 1):
+        chunk_payload = {
+            "project": payload.get("project") or "aixec",
+            "app": payload.get("app") or "register_market",
+            "dry_run": bool(payload.get("dry_run")),
+            "source": f"{payload.get('source') or 'rqdb4ai'}:{label}/{total_jobs}",
+            "generated_at": payload.get("generated_at"),
+            "books": book_chunk,
+            "market_items": market_chunk,
+            "counts": {
+                "books": len(book_chunk),
+                "market_items": len(market_chunk),
+                "chunk_index": index,
+                "chunks": total_jobs,
+            },
+        }
+        if payload.get("skip_sns"):
+            chunk_payload["skip_sns"] = True
+        response = None
+        last_error: Exception | None = None
+        for attempt in range(1, max(1, chunk_retries) + 1):
+            try:
+                response = _api_post("register-market/run-once", chunk_payload, kwargs, timeout=timeout)
+                break
+            except Exception as exc:
+                last_error = exc
+                text = str(exc)
+                if "HTTP 401" in text:
+                    raise RuntimeError(f"register-market/run-once failed chunk={label}: {exc}") from exc
+                if attempt < chunk_retries:
+                    time.sleep(min(30, 3 * attempt))
+        if response is None:
+            aggregate["status"] = "warn"
+            aggregate["chunks"].append({
+                "label": label,
+                "books": len(book_chunk),
+                "market_items": len(market_chunk),
+                "error": str(last_error)[:500],
+            })
+            aggregate["books_received"] = int(aggregate.get("books_received") or 0) + len(book_chunk)
+            aggregate["market_received"] = int(aggregate.get("market_received") or 0) + len(market_chunk)
+            aggregate["books_skipped"] = int(aggregate.get("books_skipped") or 0) + len(book_chunk)
+            aggregate["market_skipped"] = int(aggregate.get("market_skipped") or 0) + len(market_chunk)
+            continue
+        body = response.get("response") or {}
+        if not body.get("ok"):
+            raise RuntimeError(f"register-market/run-once failed chunk={label}: {body}")
+        result = dict(body.get("result") or {})
+        aggregate["chunks"].append({
+            "label": label,
+            "books": len(book_chunk),
+            "market_items": len(market_chunk),
+            "result": {
+                "items": result.get("items"),
+                "books_registered": result.get("books_registered"),
+                "market_registered": result.get("market_registered"),
+                "books_skipped": result.get("books_skipped"),
+                "market_skipped": result.get("market_skipped"),
+                "status": result.get("status"),
+            },
+        })
+        for key in ("books_received", "market_received", "books_registered", "market_registered", "books_skipped", "market_skipped", "items"):
+            aggregate[key] = int(aggregate.get(key) or 0) + int(result.get(key) or 0)
+        if str(result.get("status") or "ok") not in {"ok", "warn", "warning"}:
+            aggregate["status"] = str(result.get("status") or "down")
+        elif str(result.get("status") or "") in {"warn", "warning"} and aggregate["status"] == "ok":
+            aggregate["status"] = "warn"
+        aggregate["book_items"].extend((result.get("book_items") or [])[: max(0, 50 - len(aggregate["book_items"]))])
+        aggregate["market_items"].extend((result.get("market_items") or [])[: max(0, 50 - len(aggregate["market_items"]))])
+        for post_id in result.get("sns_post_ids") or []:
+            if post_id:
+                aggregate["sns_post_ids"].append(post_id)
+    return {"status_code": 200, "response": {"ok": True, "result": aggregate}}
+
+
 def market_pipeline_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
     started_at = dt.datetime.now(dt.timezone.utc)
     try:
@@ -592,86 +806,94 @@ def growth_agent_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
 
 
 def register_market_worker_job(dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
-    """Trigger the WEB/API-side register_market worker.
-
-    RQDB4AI must not rebuild AIxEC's ranking or DB registration logic. The
-    existing AIxEC WEB/API server owns that work and reports the real result.
-    """
+    """Collect ranking candidates and ask the AIxEC API to register missing items."""
     started_at = dt.datetime.now(dt.timezone.utc)
     project_dir = _project_dir()
-    payload = {
-        "dry_run": bool(dry_run),
-        "check_only": bool(kwargs.get("check_only")),
-        "source": str(kwargs.get("source") or "rqdb4ai"),
-    }
-    response = _api_post("register-market/run-worker", payload, kwargs, timeout=int(kwargs.get("submit_timeout") or 120))
-    body = response.get("response") or {}
-    if not body.get("ok"):
-        raise RuntimeError(f"register-market/run-worker failed: {body}")
-    api_result = dict(body.get("result") or {})
-    trigger_started = bool(api_result.get("started") or api_result.get("already_running") or api_result.get("running"))
-    if not trigger_started and not dry_run:
-        status = str(api_result.get("status") or "warn")
-        total = int(api_result.get("items") or 0)
+    if kwargs.get("check_only"):
+        response = _api_post(
+            "register-market/run-worker",
+            {"dry_run": True, "check_only": True, "source": str(kwargs.get("source") or "rqdb4ai")},
+            kwargs,
+            timeout=int(kwargs.get("submit_timeout") or 120),
+        )
+        body = response.get("response") or {}
+        result = dict(body.get("result") or {})
         finished_at = dt.datetime.now(dt.timezone.utc)
         return _standard_result(
-            ok=status in {"ok", "warn", "warning"},
-            status="warn" if status in {"warn", "warning"} else status,
-            items=total,
-            metrics={"created": total},
-            note=str(api_result.get("note") or f"register_market_worker not started status={status}")[:200],
+            ok=bool(body.get("ok")),
+            status="ok" if body.get("ok") else "down",
+            items=0,
+            metrics={"created": 0},
+            note="register_market check_only",
             **{
                 "created_at": started_at.isoformat(),
                 "finished_at": finished_at.isoformat(),
                 "dry_run": bool(dry_run),
                 "cwd": str(project_dir),
                 "endpoint": _api_url("register-market/run-worker", kwargs),
-                "trigger_started": trigger_started,
-                "api_result": api_result,
+                "api_result": result,
             },
         )
 
-    if dry_run:
-        status = str(api_result.get("status") or "ok")
-        total = int(api_result.get("items") or 0)
-        worker_status = dict(api_result)
-    else:
-        worker_name = "aixec-register-market-worker-enqueue"
-        wait_timeout = int(kwargs.get("wait_timeout") or kwargs.get("register_wait_timeout") or DEFAULT_REGISTER_TIMEOUT)
-        poll_interval = int(kwargs.get("poll_interval") or kwargs.get("register_poll_interval") or 15)
-        deadline = time.monotonic() + max(1, wait_timeout)
-        worker_status: dict[str, Any] = {}
-        while time.monotonic() < deadline:
-            worker_status = _worker_status(worker_name, kwargs)
-            worker_state = str(worker_status.get("status") or "").lower()
-            if worker_state not in {"running", "queued", "starting"}:
-                break
-            time.sleep(max(1, poll_interval))
-        else:
-            raise TimeoutError(f"register_market_worker still running after {wait_timeout} seconds: {worker_status}")
-
-        status = str(worker_status.get("status") or "unknown")
-        total = int(worker_status.get("items") or 0)
+    generated = _generate_register_market_payload(dry_run, kwargs)
+    payload = generated["payload"]
+    _report_register_worker(
+        kwargs,
+        "running",
+        0,
+        "collect books=%d market=%d failures=%d"
+        % (payload["counts"]["books"], payload["counts"]["market_items"], payload["counts"]["failures"]),
+    )
+    response = _submit_register_market_run_once(payload, kwargs)
+    body = response.get("response") or {}
+    if not body.get("ok"):
+        raise RuntimeError(f"register-market/run-once failed: {body}")
+    api_result = dict(body.get("result") or {})
+    status = str(api_result.get("status") or "ok")
+    total = int(api_result.get("items") or 0)
+    failures = int(payload["counts"].get("failures") or 0)
+    if failures and status == "ok":
+        status = "warn"
 
     finished_at = dt.datetime.now(dt.timezone.utc)
-    metrics = _metrics_from_worker_status(worker_status)
+    metrics = {
+        "created": total,
+        "books": int(api_result.get("books_registered") or 0),
+        "market": int(api_result.get("market_registered") or 0),
+        "books_skipped": int(api_result.get("books_skipped") or 0),
+        "market_skipped": int(api_result.get("market_skipped") or 0),
+        "books_received": int(api_result.get("books_received") or payload["counts"].get("books") or 0),
+        "market_received": int(api_result.get("market_received") or payload["counts"].get("market_items") or 0),
+        "failures": failures,
+    }
+    note = (
+        "books={books} market={market} dry_run={dry_run} received_books={books_received} "
+        "received_market={market_received} failures={failures}"
+    ).format(
+        books=metrics["books"],
+        market=metrics["market"],
+        dry_run=str(dry_run).lower(),
+        books_received=metrics["books_received"],
+        market_received=metrics["market_received"],
+        failures=failures,
+    )
+    _report_register_worker(kwargs, "warn" if status in {"warn", "warning"} else status, total, note)
     if status not in {"ok", "warn", "warning"}:
         return _standard_result(
             ok=False,
             status="down",
             items=total,
             metrics=metrics,
-            note=str(worker_status.get("note") or f"register_market_worker failed status={status}")[:200],
-            error=worker_status.get("note") or status,
+            note=note[:200],
+            error=api_result.get("error") or status,
             **{
                 "created_at": started_at.isoformat(),
                 "finished_at": finished_at.isoformat(),
                 "dry_run": bool(dry_run),
                 "cwd": str(project_dir),
-                "endpoint": _api_url("register-market/run-worker", kwargs),
-                "trigger_started": trigger_started,
+                "endpoint": _api_url("register-market/run-once", kwargs),
                 "api_result": api_result,
-                "worker_status": worker_status,
+                "output_path": generated["output_path"],
             },
         )
 
@@ -680,16 +902,16 @@ def register_market_worker_job(dry_run: bool = False, **kwargs: Any) -> dict[str
         status="warn" if status in {"warn", "warning"} else status,
         items=total,
         metrics=metrics,
-        note=str(worker_status.get("note") or f"register_market_worker status={status} items={total}")[:200],
+        note=note[:200],
+        artifacts=[{"type": "file", "label": "candidate_json", "path": generated["output_path"]}],
         **{
             "created_at": started_at.isoformat(),
             "finished_at": finished_at.isoformat(),
             "dry_run": bool(dry_run),
             "cwd": str(project_dir),
-            "endpoint": _api_url("register-market/run-worker", kwargs),
+            "endpoint": _api_url("register-market/run-once", kwargs),
             "created": total,
-            "trigger_started": trigger_started,
             "api_result": api_result,
-            "worker_status": worker_status,
+            "output_path": generated["output_path"],
         },
     )
