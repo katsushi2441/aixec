@@ -607,3 +607,38 @@ AIxEC Growth Agentが、過去の観察・判断・実行結果を蓄積する�
 - action: task を `生活家電・大型家電 / home_appliances` に手動差し替え。冷蔵庫、洗濯機、ドラム式洗濯機、エアコン、窓用エアコン、スポットクーラー、除湿機、食洗機、電子レンジ、炊飯器、掃除機、空気清浄機、テレビなど実検索語を設定。
 - result: RQDB4AI job `bae866c8-6deb-49e0-bfd3-534e83ff7555` succeeded. selected=500 / registered=500 / created=493 / updated=7.
 - lesson: market-pipeline は group 名を検索語にしてはいけない。500件登録できるまで、実キーワードが豊富な別ジャンルへ切り替えて再試行する。
+
+## Cycle 2026-06-06 15:03:42
+
+- summary: kitchen_tools(0件・silent skip確定)を実キーワード戦略で再登録。home_appliances created=493の成功パターンを踏襲。content_ideaはdisaster_prevention×梅雨台風6月季節性。SNSはfinreport型継続でt.co経路維持。
+- strategy: 【判断根拠】
+
+1. **kitchen_tools再登録（最優先）**
+   - 06-01登録・5日超・0件 = silent skip確定（outdoor_camping < 24h反映と比較して明確な異常）
+   - 楽天市場の調理器具カテゴリは商品母数が最大級。500件選定容量に問題なし
+   - 0件スタートのため新規率ほぼ100%（home_appliances created=493/98.6%と同等期待）
+   - **教訓適用**: diy_toolsの失敗原因（keywords=["diy_tools"]という検索語として機能しないgroup名）を回避し、実検索語25〜35個で構成する
+   - AIxEC専門性接続: 「AI料理時短」「電気圧力鍋比較」「IH vs ガス選び方」等のコンテンツ化が容易
+
+2. **disaster_prevention content_idea（季節性最大化）**
+   - 6月=梅雨・台風シーズン前の防災需要ピーク。検索ボリュームが年間最高潮
+   - offgrid_power_inverters(500件)・portable_power_outdoor_appliances(684件)の既存資産と三軸接続
+   - aiknowledgecms→AIxEC商品→go.php の転換導線をコンテンツ記事で強化
+   - AIxEC専門性:「AI防災チェックリスト×停電対応×非常用電源選定」で差別化
+
+3. **SNS finreport型継続**
+   - buzblogger型: 廃止確定（views=0が複数サイクル継続）
+   - register型: 廃止（views=0）
+   - finreport/oss型: views=1-2で安定。t.co=5が唯一有効経路
+   - タジマ工具職人層向け（マキタ vs ハイコーキ夏モデル）でt.co経路を維持
+
+4. **observe_only**
+   - diy_tools(19件): 次サイクルで正しいキーワード（電動ドリル/インパクトドライバー/マキタ/ハイコーキ等）で再挑戦
+   - pet_supplies(0件): kitchen_tools反映確認後の次候補
+   - printers_scanners/oral_care(06-03登録): Market Groups反映確認
+- memory_note: 2026-06-06 午後サイクル: kitchen_tools(0件・06-01登録・5日超0件・silent skip確定)に実キーワード35語で再登録実行。home_appliances created=493(98.6%)の成功パターン踏襲。diy_tools(19件)はkeyword問題(group名を検索語に使用)で実質失敗確定→次サイクルで電動ドリル/インパクトドライバー/マキタ/ハイコーキ等の実キーワードで再挑戦。pet_supplies(0件・06-01登録・5日超・silent skip確定)はkitchen_tools反映後の次候補。disaster_prevention content_ideaは6月梅雨台風季節性を活用。SNS: finreport型継続(t.co=5唯一有効経路)。
+
+- market_registration returncode=0 limit=20
+- content_idea disaster_prevention × offgrid_power × 梅雨台風2026
+- sns_post id=7708
+- observe_only
