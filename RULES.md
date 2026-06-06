@@ -8,6 +8,7 @@ AIxECでClaude/Codexが作業する時の共通ルール。細かい作業メモ
 - WEBサーバの公開先は `/web/aixec_exbridge_jp/`。
 - FTP接続情報はMarkdownに書かず、`/home/kojima/exdirect/aixec/.env` を使う。
 - `webapps/` を編集したら、必ずFTPアップロードまで行う。
+- CodexからGitHubへpushする時は、先に `docs/codex-git-push.md` のSSH agent手順を使う。
 - 既存商品の説明文、画像、URLなどを上書きする処理は、実行前にユーザーへ確認する。
 - API、FTP、AIxSNS投稿の接続先は、必ずルートの `SERVERS.md` を確認する。
 
