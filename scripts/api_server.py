@@ -8,6 +8,8 @@ import sys
 import threading
 import datetime
 import glob
+import hashlib
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -31,10 +33,28 @@ _HERMES_JOBS_PATH = Path("/home/kojima/.hermes/cron/jobs.json")
 _worker_status_lock = threading.Lock()
 _response_cache_lock = threading.Lock()
 _response_cache = {}
-_RESPONSE_CACHE_MAX = 512
+_RESPONSE_CACHE_MAX = int(os.environ.get("AIXEC_RESPONSE_CACHE_MAX", "192") or "192")
+_RESPONSE_CACHE_MAX_BYTES = int(os.environ.get("AIXEC_RESPONSE_CACHE_MAX_BYTES", "262144") or "262144")
+_disk_cache_locks_lock = threading.Lock()
+_disk_cache_locks = {}
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits = {}
+_request_stats_lock = threading.Lock()
+_request_stats = {}
 _lp_generation_lock = threading.Lock()
 _lp_generation_active = set()
 _LP_GENERATION_MAX = int(os.environ.get("AIXEC_LP_GENERATION_MAX", "0") or "0")
+_LP_GENERATION_RATE_PER_MIN = int(os.environ.get("AIXEC_LP_GENERATION_RATE_PER_MIN", "6") or "6")
+_BOOKS_RANKING_CACHE_TTL = int(os.environ.get("AIXEC_BOOKS_RANKING_CACHE_TTL", "900") or "900")
+_BOOKS_RANKING_STALE_TTL = int(os.environ.get("AIXEC_BOOKS_RANKING_STALE_TTL", "86400") or "86400")
+_PRODUCTS_CACHE_TTL = int(os.environ.get("AIXEC_PRODUCTS_CACHE_TTL", "120") or "120")
+_PRODUCT_DETAIL_CACHE_TTL = int(os.environ.get("AIXEC_PRODUCT_DETAIL_CACHE_TTL", "600") or "600")
+_PRODUCTS_STALE_TTL = int(os.environ.get("AIXEC_PRODUCTS_STALE_TTL", "3600") or "3600")
+_PRODUCTS_RATE_PER_MIN = int(os.environ.get("AIXEC_PRODUCTS_RATE_PER_MIN", "60") or "60")
+_PRODUCT_DETAIL_RATE_PER_MIN = int(os.environ.get("AIXEC_PRODUCT_DETAIL_RATE_PER_MIN", "120") or "120")
+_POSTS_CACHE_TTL = int(os.environ.get("AIXEC_POSTS_CACHE_TTL", "60") or "60")
+_POST_DETAIL_CACHE_TTL = int(os.environ.get("AIXEC_POST_DETAIL_CACHE_TTL", "300") or "300")
+_POSTS_STALE_TTL = int(os.environ.get("AIXEC_POSTS_STALE_TTL", "1800") or "1800")
 ALLOWED_WORKER_NAMES = {
     "url2ai-polymarket-enqueue",
     "url2ai-oss-enqueue",
@@ -131,12 +151,129 @@ def _cache_get(key, ttl=30):
         return value
 
 def _cache_set(key, value, ttl=30):
+    try:
+        if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > _RESPONSE_CACHE_MAX_BYTES:
+            return
+    except Exception:
+        return
     now = datetime.datetime.now().timestamp()
     with _response_cache_lock:
         if len(_response_cache) >= _RESPONSE_CACHE_MAX:
             for old_key in list(_response_cache.keys())[:128]:
                 _response_cache.pop(old_key, None)
         _response_cache[key] = (now + ttl, value)
+
+def _disk_cache_path(namespace, key):
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return ROOT / "storage" / "api_cache" / namespace / (digest + ".json")
+
+def _disk_cache_get(namespace, key, ttl):
+    cache_file = _disk_cache_path(namespace, key)
+    try:
+        if not cache_file.exists():
+            return None
+        age = time.time() - cache_file.stat().st_mtime
+        if age > ttl:
+            return None
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        return data.get("payload")
+    except Exception:
+        return None
+
+def _disk_cache_set(namespace, key, payload):
+    cache_file = _disk_cache_path(namespace, key)
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"payload": payload}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(cache_file)
+    except Exception:
+        pass
+
+def _singleflight_lock(key):
+    with _disk_cache_locks_lock:
+        lock = _disk_cache_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _disk_cache_locks[key] = lock
+        return lock
+
+def _rate_limit_allow(key, limit, window_seconds=60):
+    if limit <= 0:
+        return False
+    now = time.time()
+    cutoff = now - window_seconds
+    with _rate_limit_lock:
+        hits = [ts for ts in _rate_limit_hits.get(key, []) if ts >= cutoff]
+        if len(hits) >= limit:
+            _rate_limit_hits[key] = hits
+            return False
+        hits.append(now)
+        _rate_limit_hits[key] = hits
+        return True
+
+def _rate_limit_client_key(handler, scope):
+    client = "unknown"
+    try:
+        client = handler.client_address[0]
+    except Exception:
+        pass
+    return scope + ":" + client
+
+def _is_truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+def _compact_product_payload(payload, include_description=True):
+    if include_description:
+        return payload
+
+    def compact_item(item):
+        if not isinstance(item, dict):
+            return item
+        slim = dict(item)
+        slim.pop("description", None)
+        slim.pop("book_description_ai", None)
+        return slim
+
+    compacted = dict(payload)
+    if isinstance(compacted.get("items"), list):
+        compacted["items"] = [compact_item(item) for item in compacted["items"]]
+    if isinstance(compacted.get("item"), dict):
+        compacted["item"] = compact_item(compacted["item"])
+    return compacted
+
+def _request_stats_key(method, path):
+    if path.startswith("/products/"):
+        path = "/products/:id"
+    elif path.startswith("/posts/"):
+        path = "/posts/:id"
+    return method + " " + path
+
+def _record_request(method, path):
+    now = time.time()
+    key = _request_stats_key(method, path)
+    with _request_stats_lock:
+        stat = _request_stats.get(key) or {"count": 0, "last_seen": 0}
+        stat["count"] += 1
+        stat["last_seen"] = now
+        _request_stats[key] = stat
+        if len(_request_stats) > 128:
+            for old_key, _ in sorted(_request_stats.items(), key=lambda item: item[1].get("last_seen", 0))[:32]:
+                _request_stats.pop(old_key, None)
+
+def _request_stats_snapshot():
+    now = time.time()
+    with _request_stats_lock:
+        items = [
+            {
+                "path": key,
+                "count": value.get("count", 0),
+                "last_seen_seconds_ago": round(now - value.get("last_seen", now), 3),
+            }
+            for key, value in _request_stats.items()
+        ]
+    items.sort(key=lambda item: item["count"], reverse=True)
+    return items
 
 def _load_worker_status():
     try:
@@ -807,7 +944,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         request_line = args[0] if args else ''
-        if isinstance(request_line, str) and request_line.startswith('GET /products'):
+        quiet_prefixes = (
+            'GET /products',
+            'GET /posts',
+            'GET /books/ranking',
+            'GET /worker/status',
+            'GET /schedule',
+            'GET /ollama/status',
+            'GET /market/pipeline/status',
+            'GET /lp/generate',
+        )
+        if isinstance(request_line, str) and request_line.startswith(quiet_prefixes):
             return
         print('%s - %s' % (self.address_string(), fmt % args))
 
@@ -834,9 +981,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/') or '/'
         qs = parse_qs(parsed.query)
+        _record_request("GET", path)
         try:
             if path in ('/', '/health'):
                 self.send_json({'ok': True, 'name': 'AIxEC', 'runtime': 'python', 'db': str(DB_PATH)})
+                return
+            if path == '/debug/stats':
+                self.send_json({'ok': True, 'requests': _request_stats_snapshot()})
                 return
             if path == '/worker/status':
                 with _worker_status_lock:
@@ -878,18 +1029,48 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "schedule": schedule})
                 return
             if path == '/books/ranking':
-                cache_key = self.path
-                cached = _cache_get(cache_key, ttl=300)
-                if cached is not None:
-                    self.send_json(cached)
-                    return
                 genre_id = qs.get('genre_id', [''])[0]
                 hits     = qs.get('hits',     ['20'])[0]
                 sort     = qs.get('sort',     ['sales'])[0]
                 keyword  = qs.get('keyword',  [''])[0]
-                result = search_rakuten_books(genre_id=genre_id, hits=hits, sort=sort, keyword=keyword)
-                payload = {'ok': True, 'genre_id': genre_id, 'result': result}
-                _cache_set(cache_key, payload, ttl=300)
+                cache_key = "genre_id=%s&hits=%s&sort=%s&keyword=%s" % (genre_id, hits, sort, keyword)
+                cached = _cache_get("books/ranking:" + cache_key, ttl=_BOOKS_RANKING_CACHE_TTL)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
+                disk_cached = _disk_cache_get("books_ranking", cache_key, ttl=_BOOKS_RANKING_CACHE_TTL)
+                if disk_cached is not None:
+                    _cache_set("books/ranking:" + cache_key, disk_cached, ttl=_BOOKS_RANKING_CACHE_TTL)
+                    self.send_json(disk_cached)
+                    return
+                lock = _singleflight_lock("books/ranking:" + cache_key)
+                if not lock.acquire(blocking=False):
+                    stale = _disk_cache_get("books_ranking", cache_key, ttl=_BOOKS_RANKING_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    self.send_json({'ok': False, 'error': 'books ranking refresh is busy'}, 429)
+                    return
+                try:
+                    result = search_rakuten_books(genre_id=genre_id, hits=hits, sort=sort, keyword=keyword)
+                    payload = {'ok': True, 'genre_id': genre_id, 'result': result}
+                    _cache_set("books/ranking:" + cache_key, payload, ttl=_BOOKS_RANKING_CACHE_TTL)
+                    _disk_cache_set("books_ranking", cache_key, payload)
+                except Exception as exc:
+                    stale = _disk_cache_get("books_ranking", cache_key, ttl=_BOOKS_RANKING_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    payload = {'ok': False, 'genre_id': genre_id, 'error': str(exc), 'cached_error': True}
+                    _cache_set("books/ranking:" + cache_key, payload, ttl=60)
+                    self.send_json(payload, 503)
+                    return
+                finally:
+                    lock.release()
                 self.send_json(payload)
                 return
             if path == '/rakuten/search':
@@ -904,9 +1085,33 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/products':
                 cache_key = self.path
-                cached = _cache_get(cache_key, ttl=20)
+                include_description = not (
+                    _is_truthy(qs.get("lite", [""])[0])
+                    or _is_truthy(qs.get("no_description", [""])[0])
+                    or (qs.get("fields", [""])[0] or "").strip().lower() == "lite"
+                )
+                memory_cache_key = "products:" + cache_key
+                if not _rate_limit_allow(_rate_limit_client_key(self, "products"), _PRODUCTS_RATE_PER_MIN, 60):
+                    self.send_json({'ok': False, 'error': 'products rate limit reached'}, 429)
+                    return
+                cached = _cache_get(memory_cache_key, ttl=_PRODUCTS_CACHE_TTL)
                 if cached is not None:
                     self.send_json(cached)
+                    return
+                disk_cached = _disk_cache_get("products", cache_key, ttl=_PRODUCTS_CACHE_TTL)
+                if disk_cached is not None:
+                    _cache_set(memory_cache_key, disk_cached, ttl=_PRODUCTS_CACHE_TTL)
+                    self.send_json(disk_cached)
+                    return
+                lock = _singleflight_lock(memory_cache_key)
+                if not lock.acquire(blocking=False):
+                    stale = _disk_cache_get("products", cache_key, ttl=_PRODUCTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    self.send_json({'ok': False, 'error': 'products refresh is busy'}, 429)
                     return
                 limit = min(200, max(1, int(qs.get('limit', ['50'])[0])))
                 offset = max(0, int(qs.get('offset', ['0'])[0]))
@@ -962,11 +1167,23 @@ class Handler(BaseHTTPRequestHandler):
                     params.extend(attr_params)
                 sql = 'SELECT * FROM products' + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY updated_at DESC LIMIT ? OFFSET ?'
                 params.extend([limit, offset])
-                with connect() as conn:
-                    rows = conn.execute(sql, params).fetchall()
-                    items = attach_image_urls(conn, rows)
-                payload = {'ok': True, 'items': items}
-                _cache_set(cache_key, payload, ttl=20)
+                try:
+                    with connect() as conn:
+                        rows = conn.execute(sql, params).fetchall()
+                        items = attach_image_urls(conn, rows)
+                    payload = _compact_product_payload({'ok': True, 'items': items}, include_description=include_description)
+                    _cache_set(memory_cache_key, payload, ttl=_PRODUCTS_CACHE_TTL)
+                    _disk_cache_set("products", cache_key, payload)
+                except Exception:
+                    stale = _disk_cache_get("products", cache_key, ttl=_PRODUCTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    raise
+                finally:
+                    lock.release()
                 self.send_json(payload)
                 return
             if path == '/lp/generate':
@@ -985,6 +1202,12 @@ class Handler(BaseHTTPRequestHandler):
                 # 生成中
                 if lock_file.exists():
                     self.send_json({'ok': True, 'status': 'generating'})
+                    return
+                if _LP_GENERATION_MAX <= 0:
+                    self.send_json({'ok': True, 'status': 'disabled', 'message': 'lp generation is disabled'})
+                    return
+                if not _rate_limit_allow('lp/generate', _LP_GENERATION_RATE_PER_MIN, 60):
+                    self.send_json({'ok': True, 'status': 'busy', 'message': 'lp generation rate limit reached'})
                     return
                 # 商品情報取得
                 with connect() as conn:
@@ -1137,26 +1360,54 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == '/posts':
                 cache_key = self.path
-                cached = _cache_get(cache_key, ttl=10)
+                memory_cache_key = "posts:" + cache_key
+                cached = _cache_get(memory_cache_key, ttl=_POSTS_CACHE_TTL)
                 if cached is not None:
                     self.send_json(cached)
                     return
-                limit  = min(100, max(1, int(qs.get('limit',  ['20'])[0])))
-                offset = max(0, int(qs.get('offset', ['0'])[0]))
-                author = (qs.get('author', [''])[0] or '').strip()
-                exclude_author = (qs.get('exclude_author', [''])[0] or '').strip()
-                with connect() as conn:
-                    if author:
-                        rows  = conn.execute('SELECT * FROM posts WHERE author = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (author, limit, offset)).fetchall()
-                        total = conn.execute('SELECT COUNT(*) FROM posts WHERE author = ?', (author,)).fetchone()[0]
-                    elif exclude_author:
-                        rows  = conn.execute('SELECT * FROM posts WHERE author <> ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (exclude_author, limit, offset)).fetchall()
-                        total = conn.execute('SELECT COUNT(*) FROM posts WHERE author <> ?', (exclude_author,)).fetchone()[0]
-                    else:
-                        rows  = conn.execute('SELECT * FROM posts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
-                        total = conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0]
-                payload = {'ok': True, 'items': [row_dict(r) for r in rows], 'total': total}
-                _cache_set(cache_key, payload, ttl=10)
+                disk_cached = _disk_cache_get("posts", cache_key, ttl=_POSTS_CACHE_TTL)
+                if disk_cached is not None:
+                    _cache_set(memory_cache_key, disk_cached, ttl=_POSTS_CACHE_TTL)
+                    self.send_json(disk_cached)
+                    return
+                lock = _singleflight_lock(memory_cache_key)
+                if not lock.acquire(blocking=False):
+                    stale = _disk_cache_get("posts", cache_key, ttl=_POSTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    self.send_json({'ok': False, 'error': 'posts refresh is busy'}, 429)
+                    return
+                try:
+                    limit  = min(100, max(1, int(qs.get('limit',  ['20'])[0])))
+                    offset = max(0, int(qs.get('offset', ['0'])[0]))
+                    author = (qs.get('author', [''])[0] or '').strip()
+                    exclude_author = (qs.get('exclude_author', [''])[0] or '').strip()
+                    with connect() as conn:
+                        if author:
+                            rows  = conn.execute('SELECT * FROM posts WHERE author = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (author, limit, offset)).fetchall()
+                            total = conn.execute('SELECT COUNT(*) FROM posts WHERE author = ?', (author,)).fetchone()[0]
+                        elif exclude_author:
+                            rows  = conn.execute('SELECT * FROM posts WHERE author <> ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (exclude_author, limit, offset)).fetchall()
+                            total = conn.execute('SELECT COUNT(*) FROM posts WHERE author <> ?', (exclude_author,)).fetchone()[0]
+                        else:
+                            rows  = conn.execute('SELECT * FROM posts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
+                            total = conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0]
+                    payload = {'ok': True, 'items': [row_dict(r) for r in rows], 'total': total}
+                    _cache_set(memory_cache_key, payload, ttl=_POSTS_CACHE_TTL)
+                    _disk_cache_set("posts", cache_key, payload)
+                except Exception:
+                    stale = _disk_cache_get("posts", cache_key, ttl=_POSTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    raise
+                finally:
+                    lock.release()
                 self.send_json(payload)
                 return
             if path.startswith('/posts/'):
@@ -1164,28 +1415,78 @@ class Handler(BaseHTTPRequestHandler):
                 if not post_id.isdigit():
                     self.send_json({'ok': False, 'error': 'invalid id'}, 400)
                     return
+                cache_key = self.path
+                memory_cache_key = "post_detail:" + cache_key
+                cached = _cache_get(memory_cache_key, ttl=_POST_DETAIL_CACHE_TTL)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
+                disk_cached = _disk_cache_get("post_detail", cache_key, ttl=_POST_DETAIL_CACHE_TTL)
+                if disk_cached is not None:
+                    _cache_set(memory_cache_key, disk_cached, ttl=_POST_DETAIL_CACHE_TTL)
+                    self.send_json(disk_cached)
+                    return
                 with connect() as conn:
                     row = conn.execute('SELECT * FROM posts WHERE id = ?', (int(post_id),)).fetchone()
                 if not row:
                     self.send_json({'ok': False, 'error': 'post not found'}, 404)
                     return
-                self.send_json({'ok': True, 'item': row_dict(row)})
+                payload = {'ok': True, 'item': row_dict(row)}
+                _cache_set(memory_cache_key, payload, ttl=_POST_DETAIL_CACHE_TTL)
+                _disk_cache_set("post_detail", cache_key, payload)
+                self.send_json(payload)
                 return
             if path.startswith('/products/'):
                 cache_key = self.path
-                cached = _cache_get(cache_key, ttl=60)
+                include_description = not (
+                    _is_truthy(qs.get("lite", [""])[0])
+                    or _is_truthy(qs.get("no_description", [""])[0])
+                    or (qs.get("fields", [""])[0] or "").strip().lower() == "lite"
+                )
+                memory_cache_key = "product_detail:" + cache_key
+                if not _rate_limit_allow(_rate_limit_client_key(self, "product_detail"), _PRODUCT_DETAIL_RATE_PER_MIN, 60):
+                    self.send_json({'ok': False, 'error': 'product detail rate limit reached'}, 429)
+                    return
+                cached = _cache_get(memory_cache_key, ttl=_PRODUCT_DETAIL_CACHE_TTL)
                 if cached is not None:
                     self.send_json(cached)
                     return
-                product_key = unquote(path.split('/', 2)[2])
-                with connect() as conn:
-                    row = self.find_product(conn, product_key)
-                    if not row:
-                        self.send_json({'ok': False, 'error': 'product not found'}, 404)
+                disk_cached = _disk_cache_get("product_detail", cache_key, ttl=_PRODUCT_DETAIL_CACHE_TTL)
+                if disk_cached is not None:
+                    _cache_set(memory_cache_key, disk_cached, ttl=_PRODUCT_DETAIL_CACHE_TTL)
+                    self.send_json(disk_cached)
+                    return
+                lock = _singleflight_lock(memory_cache_key)
+                if not lock.acquire(blocking=False):
+                    stale = _disk_cache_get("product_detail", cache_key, ttl=_PRODUCTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
                         return
-                    item = attach_image_urls(conn, row)
-                payload = {'ok': True, 'item': item}
-                _cache_set(cache_key, payload, ttl=60)
+                    self.send_json({'ok': False, 'error': 'product detail refresh is busy'}, 429)
+                    return
+                product_key = unquote(path.split('/', 2)[2])
+                try:
+                    with connect() as conn:
+                        row = self.find_product(conn, product_key)
+                        if not row:
+                            self.send_json({'ok': False, 'error': 'product not found'}, 404)
+                            return
+                        item = attach_image_urls(conn, row)
+                    payload = _compact_product_payload({'ok': True, 'item': item}, include_description=include_description)
+                    _cache_set(memory_cache_key, payload, ttl=_PRODUCT_DETAIL_CACHE_TTL)
+                    _disk_cache_set("product_detail", cache_key, payload)
+                except Exception:
+                    stale = _disk_cache_get("product_detail", cache_key, ttl=_PRODUCTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    raise
+                finally:
+                    lock.release()
                 self.send_json(payload)
                 return
             self.send_json({'ok': False, 'error': 'not found'}, 404)
