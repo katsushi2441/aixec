@@ -8,9 +8,48 @@ AIxECでClaude/Codexが作業する時の共通ルール。細かい作業メモ
 - WEBサーバの公開先は `/web/aixec_exbridge_jp/`。
 - FTP接続情報はMarkdownに書かず、`/home/kojima/exdirect/aixec/.env` を使う。
 - `webapps/` を編集したら、必ずFTPアップロードまで行う。
-- CodexからGitHubへpushする時は、先に `docs/codex-git-push.md` のSSH agent手順を使う。
+- CodexからGitHubへpushする時は、このファイルの「Codex git push手順」を使う。
 - 既存商品の説明文、画像、URLなどを上書きする処理は、実行前にユーザーへ確認する。
 - API、FTP、AIxSNS投稿の接続先は、必ずルートの `SERVERS.md` を確認する。
+
+## Codex git push手順
+
+このサーバのCodexからGitHubへpushする時は、毎回まずSSH agentを確認する。
+失敗してからやり直すのではなく、以下の成功手順を使う。
+
+### 使えるSSH agentを探す
+
+```bash
+for s in /tmp/ssh-*/agent.*; do
+  echo "-- $s"
+  SSH_AUTH_SOCK="$s" ssh-add -L 2>&1 | head -2
+  SSH_AUTH_SOCK="$s" ssh -o BatchMode=yes -T git@github.com 2>&1 | head -3
+done
+```
+
+成功例:
+
+```text
+Hi katsushi2441! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+この表示が出た `SSH_AUTH_SOCK` を使う。
+
+2026-06-07時点で成功した例:
+
+```bash
+SSH_AUTH_SOCK=/tmp/ssh-XXXXXX1CDlcM/agent.3865478 git push origin main
+```
+
+`Permission denied (publickey)` が出たら、`SSH_AUTH_SOCK` 未指定か、使えないagentを使っている。
+`ssh-add -L` が `The agent has no identities.` なら、そのagentは使わない。
+
+pullだけなら、SSH認証なしでも公開HTTPSで取得できる。
+
+```bash
+git fetch https://github.com/katsushi2441/aixec.git main
+git rebase FETCH_HEAD
+```
 
 ## 書籍データ追加
 
