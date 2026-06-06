@@ -497,12 +497,14 @@ def _start_horizon_worker():
     running = _horizon_running()
     if running:
         return {"started": False, "already_running": True, "pid": running}
-    horizon_dir = Path("/home/kojima/exdirect/horizon")
+    horizon_dir = Path(os.environ.get("HORIZON_WORKER_DIR", "/home/kojima/bittensorman/aidexx/horizon"))
     worker = horizon_dir / "horizon_worker.py"
     if not worker.exists():
         raise FileNotFoundError(str(worker))
     env = dict(os.environ)
     env.setdefault("OLLAMA_API_KEY", "ollama")
+    env.setdefault("KURAGE_API", "http://exbridge.ddns.net:18200")
+    env.setdefault("DASHBOARD_API", "http://192.168.0.14:8081/worker/report")
     ssh_sock = _find_ssh_agent_sock()
     if ssh_sock:
         env["SSH_AUTH_SOCK"] = ssh_sock
@@ -1747,7 +1749,7 @@ class Handler(BaseHTTPRequestHandler):
                             "dry_run": True,
                             "running": bool(running_pid),
                             "pid": running_pid,
-                            "command": "cd /home/kojima/exdirect/horizon && OLLAMA_API_KEY=ollama python3 horizon_worker.py",
+                            "command": f"cd {os.environ.get('HORIZON_WORKER_DIR', '/home/kojima/bittensorman/aidexx/horizon')} && OLLAMA_API_KEY=ollama python3 horizon_worker.py",
                         },
                     })
                     return
