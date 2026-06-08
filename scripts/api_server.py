@@ -1446,9 +1446,6 @@ class Handler(BaseHTTPRequestHandler):
                     or (qs.get("fields", [""])[0] or "").strip().lower() == "lite"
                 )
                 memory_cache_key = "product_detail:" + cache_key
-                if not _rate_limit_allow(_rate_limit_client_key(self, "product_detail"), _PRODUCT_DETAIL_RATE_PER_MIN, 60):
-                    self.send_json({'ok': False, 'error': 'product detail rate limit reached'}, 429)
-                    return
                 cached = _cache_get(memory_cache_key, ttl=_PRODUCT_DETAIL_CACHE_TTL)
                 if cached is not None:
                     self.send_json(cached)
@@ -1457,6 +1454,15 @@ class Handler(BaseHTTPRequestHandler):
                 if disk_cached is not None:
                     _cache_set(memory_cache_key, disk_cached, ttl=_PRODUCT_DETAIL_CACHE_TTL)
                     self.send_json(disk_cached)
+                    return
+                if not _rate_limit_allow(_rate_limit_client_key(self, "product_detail"), _PRODUCT_DETAIL_RATE_PER_MIN, 60):
+                    stale = _disk_cache_get("product_detail", cache_key, ttl=_PRODUCTS_STALE_TTL)
+                    if stale is not None:
+                        stale = dict(stale)
+                        stale["stale"] = True
+                        self.send_json(stale)
+                        return
+                    self.send_json({'ok': False, 'error': 'product detail rate limit reached'}, 429)
                     return
                 lock = _singleflight_lock(memory_cache_key)
                 if not lock.acquire(blocking=False):
