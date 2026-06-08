@@ -386,8 +386,21 @@ def _submit_market_candidates(payload: dict[str, Any], kwargs: dict[str, Any], d
     if token:
         request_payload["api_token"] = str(token)
 
-    items = list(request_payload.get("items") or [])
-    chunk_size = int(kwargs.get("market_pipeline_chunk_size") or kwargs.get("submit_chunk_size") or 50)
+    def submit_item(item: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "keyword", "name", "catchcopy", "caption", "price", "item_url",
+            "affiliate_url", "image_url", "shop_name", "shop_code", "item_code",
+            "genre_id", "review_average", "review_count", "jan", "_selection",
+        }
+        compact = {k: v for k, v in item.items() if k in allowed}
+        compact["name"] = _limit_text(compact.get("name"), 240)
+        compact["catchcopy"] = _limit_text(compact.get("catchcopy"), 240)
+        compact["caption"] = _limit_text(compact.get("caption"), int(kwargs.get("submit_caption_limit") or 700))
+        return compact
+
+    items = [submit_item(item) for item in list(request_payload.get("items") or []) if isinstance(item, dict)]
+    request_payload["items"] = items
+    chunk_size = int(kwargs.get("market_pipeline_chunk_size") or kwargs.get("submit_chunk_size") or 25)
     if len(items) <= chunk_size:
         result = _post_json(url, request_payload, timeout=int(kwargs.get("submit_timeout") or 120))
         return {"submitted": True, "url": url, **result}
@@ -420,10 +433,23 @@ def _submit_market_candidates(payload: dict[str, Any], kwargs: dict[str, Any], d
         }
         if isinstance(chunk_payload.get("task"), dict):
             chunk_payload["task"] = {**chunk_payload["task"], "target_count": len(chunk)}
-        result = _post_json(url, chunk_payload, timeout=timeout)
-        body = result.get("response") or {}
-        if not body.get("ok"):
-            raise RuntimeError(f"market/register-task failed chunk={index}/{len(chunks)}: {body}")
+        try:
+            result = _post_json(url, chunk_payload, timeout=timeout)
+            body = result.get("response") or {}
+            if not body.get("ok"):
+                raise RuntimeError(f"market/register-task failed chunk={index}/{len(chunks)}: {body}")
+        except Exception as exc:
+            aggregate["skipped"] = int(aggregate.get("skipped") or 0) + len(chunk)
+            aggregate["chunks"].append({
+                "index": index,
+                "items": len(chunk),
+                "registered": 0,
+                "created": 0,
+                "updated": 0,
+                "skipped": len(chunk),
+                "error": str(exc)[:500],
+            })
+            continue
         chunk_result = dict(body.get("result") or {})
         for key in ("registered", "created", "updated", "skipped"):
             aggregate[key] = int(aggregate.get(key) or 0) + int(chunk_result.get(key) or 0)
