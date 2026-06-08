@@ -253,3 +253,68 @@ AssociateNotEligible
 これはキー形式やSDK呼び出し以前の問題ではなく、Amazon側が現在のアソシエイトアカウントをCreators API利用条件未達と判定している状態。
 
 Amazon側でCreators API eligibilityが有効になったら、同じコマンドで再テストする。
+
+## 2026-06-08 Read-only Retest Result
+
+Amazon注文が30日内10件になったため再テストした。
+
+実行:
+
+```bash
+uv run --python 3.12 --with creators \
+  python scripts/amazon_creators_client.py search \
+  --keywords "RTX 5090 グラフィックボード" \
+  --limit 5 \
+  --min-price 50000 \
+  --sort-enum FEATURED
+```
+
+結果:
+
+```text
+AssociateNotEligible
+```
+
+軽い条件でも再確認:
+
+```bash
+uv run --python 3.12 --with creators \
+  python scripts/amazon_creators_client.py search \
+  --keywords "水 炭酸水" \
+  --limit 1 \
+  --min-price 1 \
+  --sort-enum FEATURED
+```
+
+結果:
+
+```text
+AssociateNotEligible
+```
+
+確認できたこと:
+
+- `docs/AIxEC-credentials.csv` は読み込めている。
+- `Credential Id` は `amzn1.application-oa2-...` 形式。
+- `Secret` は `amzn1.oa2-cs...` 形式。
+- SDK呼び出しはAmazon側まで到達している。
+- `creators` ラッパーではなく `creatorsapi_python_sdk.DefaultApi` 直呼びでも同じ403になる。
+- `SearchItems` だけでなく `GetItems` でも同じ `AssociateNotEligible` になる。
+- `version=3.3` + `marketplace=www.amazon.co.jp` が正しい組み合わせ。
+  - `v3.3` はSDK側で非対応。
+  - `2.3` はOAuthで `invalid_client` になり、今回の認証情報とは合わない。
+  - `amazon.co.jp` はmarketplace形式として不正。`www.amazon.co.jp` が必要。
+- ただしAmazon側は現在もこのアカウントをCreators API eligibleとして扱っていない。
+
+考えられる原因:
+
+- 10件が「注文」ではなく、Amazon側で「qualified / shipped / paid」になった売上としてまだ確定していない。
+- 条件達成後、Creators API eligible反映まで時間差がある。
+- Associates Central側でCreators API画面の状態がまだeligibleに更新されていない。
+- Creators APIの前提である「approved creators account」状態がPA APIアクセス許可としてまだ反映されていない。
+
+次回確認:
+
+1. Amazon Associates CentralでCreators API欄が利用可能表示になっているか確認する。
+2. 注文10件がキャンセル・返品ではなく発送済み/資格対象になっているか確認する。
+3. 1〜2日後に同じコマンドで再テストする。

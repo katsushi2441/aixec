@@ -34,3 +34,6 @@ heteml/
 # Local tooling
 .venv/
 venv/
+
+# Local temporary investigation outputs
+tmp/
