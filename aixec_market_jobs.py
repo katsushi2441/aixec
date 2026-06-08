@@ -386,8 +386,58 @@ def _submit_market_candidates(payload: dict[str, Any], kwargs: dict[str, Any], d
     if token:
         request_payload["api_token"] = str(token)
 
-    result = _post_json(url, request_payload, timeout=int(kwargs.get("submit_timeout") or 120))
-    return {"submitted": True, "url": url, **result}
+    items = list(request_payload.get("items") or [])
+    chunk_size = int(kwargs.get("market_pipeline_chunk_size") or kwargs.get("submit_chunk_size") or 50)
+    if len(items) <= chunk_size:
+        result = _post_json(url, request_payload, timeout=int(kwargs.get("submit_timeout") or 120))
+        return {"submitted": True, "url": url, **result}
+
+    aggregate = {
+        "label": (request_payload.get("task") or {}).get("label", ""),
+        "group": (request_payload.get("task") or {}).get("group", ""),
+        "genre_id": (request_payload.get("task") or {}).get("genre_id", ""),
+        "dry_run": bool(request_payload.get("dry_run")),
+        "candidates": len(items),
+        "selected": len(items),
+        "registered": 0,
+        "created": 0,
+        "updated": 0,
+        "skipped": 0,
+        "items": [],
+        "chunks": [],
+    }
+    chunks = list(_chunks(items, chunk_size))
+    timeout = int(kwargs.get("submit_timeout") or 120)
+    for index, chunk in enumerate(chunks, 1):
+        chunk_payload = dict(request_payload)
+        chunk_payload["items"] = chunk
+        chunk_payload["counts"] = {
+            **(request_payload.get("counts") if isinstance(request_payload.get("counts"), dict) else {}),
+            "candidates": len(chunk),
+            "selected": len(chunk),
+            "chunk_index": index,
+            "chunks": len(chunks),
+        }
+        if isinstance(chunk_payload.get("task"), dict):
+            chunk_payload["task"] = {**chunk_payload["task"], "target_count": len(chunk)}
+        result = _post_json(url, chunk_payload, timeout=timeout)
+        body = result.get("response") or {}
+        if not body.get("ok"):
+            raise RuntimeError(f"market/register-task failed chunk={index}/{len(chunks)}: {body}")
+        chunk_result = dict(body.get("result") or {})
+        for key in ("registered", "created", "updated", "skipped"):
+            aggregate[key] = int(aggregate.get(key) or 0) + int(chunk_result.get(key) or 0)
+        aggregate["items"].extend((chunk_result.get("items") or [])[: max(0, 100 - len(aggregate["items"]))])
+        aggregate["chunks"].append({
+            "index": index,
+            "items": len(chunk),
+            "registered": int(chunk_result.get("registered") or 0),
+            "created": int(chunk_result.get("created") or 0),
+            "updated": int(chunk_result.get("updated") or 0),
+            "skipped": int(chunk_result.get("skipped") or 0),
+        })
+        time.sleep(float(kwargs.get("submit_chunk_delay") or 0.2))
+    return {"submitted": True, "url": url, "status_code": 200, "response": {"ok": True, "result": aggregate}}
 
 
 def _generate_market_candidates(task: dict[str, Any], dry_run: bool, kwargs: dict[str, Any]) -> dict[str, Any]:
