@@ -443,8 +443,6 @@ if ($detail) {
 <?php if ($product_schema_json !== ''): ?>
 <script type="application/ld+json"><?php echo $product_schema_json; ?></script>
 <?php endif; ?>
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2528616930208188"
-     crossorigin="anonymous"></script>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-BP0650KDFR"></script>
 <script>

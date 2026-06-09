@@ -665,8 +665,6 @@ a.badge:hover{background:var(--accent-dark)}
     document.head.appendChild(s);
 })();
 </script>
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2528616930208188"
-     crossorigin="anonymous"></script>
 </head>
 <body>
 
