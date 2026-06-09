@@ -23,6 +23,15 @@ function st_is_bot_ua($ua){
     return false;
 }
 
+function st_set_seen_cookie(){
+    $secure = (!empty($_SERVER["HTTPS"]) && $_SERVER["HTTPS"] !== "off");
+    $cookie = "aixec_st_seen=" . time()
+        . "; Path=/; Max-Age=2592000; SameSite=Lax"
+        . ($secure ? "; Secure" : "")
+        . "; HttpOnly";
+    header("Set-Cookie: " . $cookie, false);
+}
+
 /* =========================
    ダッシュボードモード
 ========================= */
@@ -101,6 +110,11 @@ if(isset($_GET["dashboard"])){
                 $model = isset($params["model_number"]) ? trim((string)$params["model_number"]) : "";
                 if($model === "" && isset($params["model"])) $model = trim((string)$params["model"]);
                 $from = isset($params["from"]) ? trim((string)$params["from"]) : "";
+                $quality = isset($params["click_quality"]) ? strtolower(trim((string)$params["click_quality"])) : "";
+                $is_likely_human_click = ($quality === "likely_human");
+                if($quality === ""){
+                    $is_likely_human_click = ($ref !== "");
+                }
                 if($from === "" && $ref !== ""){
                     $ref_parts = parse_url($ref);
                     $ref_path = isset($ref_parts["path"]) ? $ref_parts["path"] : "";
@@ -116,9 +130,10 @@ if(isset($_GET["dashboard"])){
                     if($product_label === "") $product_label = "(unknown)";
                     $from_key = $to . "|" . $from;
                     if(!isset($go_from_count[$from_key])){
-                        $go_from_count[$from_key] = array("to" => $to, "from" => $from, "clicks" => 0, "latest_at" => "");
+                        $go_from_count[$from_key] = array("to" => $to, "from" => $from, "clicks" => 0, "raw_clicks" => 0, "latest_at" => "");
                     }
-                    $go_from_count[$from_key]["clicks"]++;
+                    $go_from_count[$from_key]["raw_clicks"]++;
+                    if($is_likely_human_click) $go_from_count[$from_key]["clicks"]++;
                     if($go_from_count[$from_key]["latest_at"] === "" || $parts[0] > $go_from_count[$from_key]["latest_at"]){
                         $go_from_count[$from_key]["latest_at"] = $parts[0];
                     }
@@ -133,10 +148,12 @@ if(isset($_GET["dashboard"])){
                             "model" => $model,
                             "from" => $from,
                             "clicks" => 0,
+                            "raw_clicks" => 0,
                             "latest_at" => "",
                         );
                     }
-                    $go_product_count[$key]["clicks"]++;
+                    $go_product_count[$key]["raw_clicks"]++;
+                    if($is_likely_human_click) $go_product_count[$key]["clicks"]++;
                     if($go_product_count[$key]["latest_at"] === "" || $parts[0] > $go_product_count[$key]["latest_at"]){
                         $go_product_count[$key]["latest_at"] = $parts[0];
                     }
@@ -161,13 +178,15 @@ if(isset($_GET["dashboard"])){
         $la = $a["latest_at"] ?? "";
         $lb = $b["latest_at"] ?? "";
         if($la !== $lb) return strcmp($lb, $la); // 最新順
-        return ($a["clicks"] > $b["clicks"]) ? -1 : 1;
+        if($a["clicks"] !== $b["clicks"]) return ($a["clicks"] > $b["clicks"]) ? -1 : 1;
+        return (($a["raw_clicks"] ?? 0) > ($b["raw_clicks"] ?? 0)) ? -1 : 1;
     });
     uasort($go_from_count, function($a, $b){
         $la = $a["latest_at"] ?? "";
         $lb = $b["latest_at"] ?? "";
         if($la !== $lb) return strcmp($lb, $la); // 最新順
-        return ($a["clicks"] > $b["clicks"]) ? -1 : 1;
+        if($a["clicks"] !== $b["clicks"]) return ($a["clicks"] > $b["clicks"]) ? -1 : 1;
+        return (($a["raw_clicks"] ?? 0) > ($b["raw_clicks"] ?? 0)) ? -1 : 1;
     });
 
     $filtered_urls = $url_count;
@@ -177,6 +196,18 @@ if(isset($_GET["dashboard"])){
     $top_refs = array_slice($filtered_refs, 0, 20, true);
     $top_go_products = array_slice($go_product_count, 0, 50, true);
     $top_go_from = array_slice($go_from_count, 0, 50, true);
+
+    $go_totals = array();
+    foreach($go_product_count as $row){
+        $to_key = $row["to"] !== "" ? $row["to"] : "(unknown)";
+        if(!isset($go_totals[$to_key])) $go_totals[$to_key] = array("clicks" => 0, "raw_clicks" => 0);
+        $go_totals[$to_key]["clicks"] += (int)$row["clicks"];
+        $go_totals[$to_key]["raw_clicks"] += (int)($row["raw_clicks"] ?? $row["clicks"]);
+    }
+    $amazon_clicks = isset($go_totals["amazon"]) ? $go_totals["amazon"]["clicks"] : 0;
+    $amazon_raw_clicks = isset($go_totals["amazon"]) ? $go_totals["amazon"]["raw_clicks"] : 0;
+    $rakuten_clicks = isset($go_totals["rakuten"]) ? $go_totals["rakuten"]["clicks"] : 0;
+    $rakuten_raw_clicks = isset($go_totals["rakuten"]) ? $go_totals["rakuten"]["raw_clicks"] : 0;
 
     $all_urls_array = array();
     foreach($filtered_urls as $u => $c){
@@ -268,8 +299,8 @@ canvas{background:#fff;border-radius:4px}
 <div class="range-note">表示期間: <?php echo h($range_labels[$range]); ?></div>
 <div class="stats">
   <div class="stat"><small>Total PV</small><strong><?php echo number_format(array_sum($pv_per_day)); ?></strong></div>
-  <div class="stat"><small>Tracked URLs</small><strong><?php echo number_format(count($url_count)); ?></strong></div>
-  <div class="stat"><small>Referrers</small><strong><?php echo number_format(count($ref_count)); ?></strong></div>
+  <div class="stat"><small>Amazon 実クリック / raw</small><strong><?php echo number_format($amazon_clicks); ?> / <?php echo number_format($amazon_raw_clicks); ?></strong></div>
+  <div class="stat"><small>楽天 実クリック / raw</small><strong><?php echo number_format($rakuten_clicks); ?> / <?php echo number_format($rakuten_raw_clicks); ?></strong></div>
 </div>
 
 <div class="canvasBox">
@@ -291,11 +322,11 @@ canvas{background:#fff;border-radius:4px}
 <h2>go.php 呼び出し元ページ</h2>
 <table>
 <thead>
-<tr><th>#</th><th>呼び出し元</th><th>遷移先</th><th>最新クリック日時</th><th>クリック</th></tr>
+<tr><th>#</th><th>呼び出し元</th><th>遷移先</th><th>最新クリック日時</th><th>実クリック</th><th>raw</th></tr>
 </thead>
 <tbody>
 <?php if(empty($top_go_from)): ?>
-<tr><td colspan="5">go.php のクリックはありません。</td></tr>
+<tr><td colspan="6">go.php のクリックはありません。</td></tr>
 <?php else: ?>
 <?php $from_idx = 1; foreach($top_go_from as $row): ?>
 <tr>
@@ -304,6 +335,7 @@ canvas{background:#fff;border-radius:4px}
   <td><?php echo h($row["to"]); ?></td>
   <td><?php echo h($row["latest_at"]); ?></td>
   <td><?php echo number_format($row["clicks"]); ?></td>
+  <td><?php echo number_format($row["raw_clicks"] ?? $row["clicks"]); ?></td>
 </tr>
 <?php endforeach; ?>
 <?php endif; ?>
@@ -315,11 +347,11 @@ canvas{background:#fff;border-radius:4px}
 <h2>go.php 商品別クリック</h2>
 <table>
 <thead>
-<tr><th>#</th><th>商品</th><th>呼び出し元</th><th>遷移先</th><th>商品ID</th><th>JAN / ASIN / Model</th><th>最新クリック日時</th><th>クリック</th></tr>
+<tr><th>#</th><th>商品</th><th>呼び出し元</th><th>遷移先</th><th>商品ID</th><th>JAN / ASIN / Model</th><th>最新クリック日時</th><th>実クリック</th><th>raw</th></tr>
 </thead>
 <tbody>
 <?php if(empty($top_go_products)): ?>
-<tr><td colspan="8">go.php のクリックはありません。</td></tr>
+<tr><td colspan="9">go.php のクリックはありません。</td></tr>
 <?php else: ?>
 <?php $go_idx = 1; foreach($top_go_products as $row): ?>
 <tr>
@@ -331,6 +363,7 @@ canvas{background:#fff;border-radius:4px}
   <td><?php echo h(trim($row["jan"] . " " . $row["asin"] . " " . $row["model"])); ?></td>
   <td><?php echo h($row["latest_at"]); ?></td>
   <td><?php echo number_format($row["clicks"]); ?></td>
+  <td><?php echo number_format($row["raw_clicks"] ?? $row["clicks"]); ?></td>
 </tr>
 <?php endforeach; ?>
 <?php endif; ?>
@@ -512,6 +545,10 @@ if(st_is_bot_ua($ua)){
     header("Content-Type: application/javascript");
     echo "// ignored";
     exit;
+}
+
+if(!$internal_ok){
+    st_set_seen_cookie();
 }
 
 // ---- 4. ログ書き込み ----

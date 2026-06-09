@@ -27,6 +27,23 @@ function go_is_bot_ua($ua) {
     return false;
 }
 
+function go_recent_seen_cookie() {
+    if (empty($_COOKIE['aixec_st_seen'])) return false;
+    $seen = preg_replace('/\D/', '', (string)$_COOKIE['aixec_st_seen']);
+    if ($seen === '') return false;
+    $ts = intval($seen);
+    return $ts > 0 && $ts >= (time() - 86400);
+}
+
+function go_valid_referrer($ref) {
+    $ref = trim((string)$ref);
+    if ($ref === '') return false;
+    $parts = parse_url($ref);
+    if (empty($parts['host'])) return false;
+    $host = strtolower($parts['host']);
+    return $host === 'aixec.exbridge.jp' || substr($host, -12) === '.exbridge.jp';
+}
+
 function api_get($path, $params) {
     $params = array_merge(array('path' => ltrim($path, '/')), $params);
     $url = 'https://aixec.exbridge.jp/api.php?' . http_build_query($params);
@@ -209,6 +226,8 @@ $direct_url = isset($_GET['url']) ? trim($_GET['url']) : '';
 $ua = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
 $from = isset($_GET['from']) ? trim((string)$_GET['from']) : '';
 $ref = isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : '';
+$seen_cookie = go_recent_seen_cookie();
+$valid_ref = go_valid_referrer($ref);
 
 if (go_is_bot_ua($ua)) {
     header('Cache-Control: no-store');
@@ -284,7 +303,9 @@ $click_url .= (strpos($click_url, '?') === false ? '?' : '&')
     . '&model_number=' . rawurlencode($model)
     . '&jan=' . rawurlencode($jan)
     . '&asin=' . rawurlencode($asin)
-    . '&from=' . rawurlencode($from);
+    . '&from=' . rawurlencode($from)
+    . '&click_quality=' . rawurlencode(($valid_ref || $seen_cookie) ? 'likely_human' : 'raw')
+    . '&click_signal=' . rawurlencode($valid_ref ? 'referrer' : ($seen_cookie ? 'seen_cookie' : 'none'));
 
 $track_url = 'https://aixec.exbridge.jp/simpletrack.php?' . http_build_query(array(
     'url' => $click_url,
