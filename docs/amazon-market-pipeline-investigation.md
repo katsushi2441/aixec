@@ -318,3 +318,43 @@ AssociateNotEligible
 1. Amazon Associates CentralでCreators API欄が利用可能表示になっているか確認する。
 2. 注文10件がキャンセル・返品ではなく発送済み/資格対象になっているか確認する。
 3. 1〜2日後に同じコマンドで再テストする。
+
+## 2026-06-09 New Credential Retest Result
+
+別の認証情報 `docs/AIxEC-credentials (1).csv` で再テストした。
+
+実行:
+
+```bash
+uv run --python 3.12 --with creators \
+  python scripts/amazon_creators_client.py search \
+  --credentials-csv 'docs/AIxEC-credentials (1).csv' \
+  --keywords "RTX 5090 グラフィックボード" \
+  --limit 5 \
+  --min-price 50000 \
+  --sort-enum FEATURED
+```
+
+軽い検索でも確認:
+
+```bash
+uv run --python 3.12 --with creators \
+  python scripts/amazon_creators_client.py search \
+  --credentials-csv 'docs/AIxEC-credentials (1).csv' \
+  --keywords "水 炭酸水" \
+  --limit 1 \
+  --min-price 1 \
+  --sort-enum FEATURED
+```
+
+結果:
+
+```text
+AssociateNotEligible
+```
+
+結論:
+
+- 新しい認証情報でもOAuth認証とAPI到達はできている。
+- ただしAmazon側がまだこのアカウントをCreators API eligibleとして扱っていない。
+- API実装やcredential形式の問題ではなく、Amazon側の資格反映待ち、またはCreators API側の利用資格未達判定。
