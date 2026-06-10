@@ -69,6 +69,8 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout: int = 20) -> dic
 
 
 def _post_aixsns_if_needed(improvement_job: dict[str, Any], result: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    if result.get("sns_post"):
+        return result
     if dry_run or not result.get("ok") or int(result.get("items") or 0) < 1:
         return result
     job_id = str(improvement_job.get("id") or "").strip()
@@ -261,6 +263,106 @@ def _amazon_hub_article_job(improvement_job: dict[str, Any], dry_run: bool) -> d
     )
 
 
+def _post_aixsns_article(author: str, content: str, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"ok": True, "dry_run": True, "id": None, "status_code": 0}
+    post = _http_post_json(SNS_POST_URL, {"author": author, "content": content}, timeout=30)
+    return {
+        "ok": bool(post.get("ok")),
+        "id": (post.get("item") or {}).get("id") if isinstance(post.get("item"), dict) else None,
+        "status_code": post.get("status_code"),
+        "raw": post,
+    }
+
+
+def _search_query_answer_article_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = dict(improvement_job.get("payload") or {})
+    query = str(payload.get("query") or "").strip()
+    page = str(payload.get("page") or "").strip()
+    if not query or not page:
+        return _result(ok=False, status="failed", items=0, note="query and page are required", error="missing query/page")
+    amazon_url = SITE_BASE + "/go.php?" + urllib.parse.urlencode({"to": "amazon", "kw": query, "from": "kgrowth-search-query"})
+    title = f"{query}を探している人へ"
+    content = "\n".join(
+        [
+            title,
+            "",
+            f"Google Search Consoleで「{query}」の表示が確認できました。検索している人は、概要だけでなく、関連する商品・書籍・動画をすぐ比較したい状態だと考えられます。",
+            "",
+            "AIxECでは、このテーマに関連する商品ページやAIxTube動画を確認できます。まず元ページで内容を確認し、購入候補はAmazonでも価格・在庫・レビューを比較してください。",
+            "",
+            f"元ページ: {page}",
+            f"Amazonで探す: {amazon_url}",
+            "",
+            f"kgrowth:{improvement_job.get('id','')}",
+        ]
+    )
+    artifact = _write_artifact("search_query_answer_article", str(improvement_job.get("id") or ""), "md", content)
+    post = _post_aixsns_article("kgrowth", content, dry_run)
+    ok = bool(post.get("ok"))
+    result = _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note=f"{query}: 検索意図回答記事{'dry-run生成' if dry_run else '投稿'}完了",
+        metrics={"query": query, "page": page, "position": payload.get("position"), "impressions": payload.get("impressions")},
+        artifacts=[artifact],
+        error="" if ok else "AIxSNS post failed",
+    )
+    result["sns_post"] = post
+    return result
+
+
+def _affiliate_product_article_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = dict(improvement_job.get("payload") or {})
+    product = str(payload.get("product") or "").strip()
+    if not product:
+        return _result(ok=False, status="failed", items=0, note="product is required", error="missing product")
+    pid = str(payload.get("pid") or "").strip()
+    jan = str(payload.get("jan") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    source = str(payload.get("source") or "").strip()
+    params = {"to": "amazon", "kw": product, "from": "kgrowth-affiliate-product"}
+    if pid:
+        params["pid"] = pid
+    if jan:
+        params["jan"] = jan
+    if model:
+        params["model"] = model
+    amazon_url = SITE_BASE + "/go.php?" + urllib.parse.urlencode(params)
+    internal_url = source if source.startswith("http") else (SITE_BASE + source if source.startswith("/") else "")
+    content = "\n".join(
+        [
+            f"{product}を比較する",
+            "",
+            "simpletrackのbot除外済み実クリックで反応が出ている商品です。購入検討者は型番・JAN・商品名で探している可能性が高いため、AIxEC内の関連ページとAmazon導線をまとめます。",
+            "",
+            f"商品名: {product}",
+            f"型番: {model}" if model else "",
+            f"JAN/ISBN: {jan}" if jan else "",
+            f"AIxEC内の流入元: {internal_url}" if internal_url else "",
+            f"Amazonで探す: {amazon_url}",
+            "",
+            f"kgrowth:{improvement_job.get('id','')}",
+        ]
+    )
+    content = "\n".join(line for line in content.splitlines() if line != "")
+    artifact = _write_artifact("affiliate_product_article", str(improvement_job.get("id") or ""), "md", content)
+    post = _post_aixsns_article("kgrowth", content, dry_run)
+    ok = bool(post.get("ok"))
+    result = _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note=f"{product}: 実クリック商品記事{'dry-run生成' if dry_run else '投稿'}完了",
+        metrics={"product": product, "pid": pid, "jan": jan, "model": model, "clicks": payload.get("clicks", 0)},
+        artifacts=[artifact],
+        error="" if ok else "AIxSNS post failed",
+    )
+    result["sns_post"] = post
+    return result
+
+
 def _aixtube_amazon_cta_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
     text = _read("webapps/aixtube.php")
     body = text.split("<body>", 1)[-1]
@@ -388,7 +490,11 @@ def execute_improvement_job(
     if not kind:
         return _result(ok=False, status="failed", items=0, note="improvement_job.kind is required", error="missing kind")
 
-    if kind == "amazon_cta_rebalance":
+    if kind == "search_query_answer_article":
+        result = _search_query_answer_article_job(job, dry_run)
+    elif kind == "affiliate_product_article":
+        result = _affiliate_product_article_job(job, dry_run)
+    elif kind == "amazon_cta_rebalance":
         result = _amazon_cta_rebalance_job(job, dry_run)
     elif kind == "amazon_product_growth":
         result = _amazon_product_growth_job(job, dry_run)
