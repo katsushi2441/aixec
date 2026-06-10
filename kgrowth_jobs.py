@@ -153,105 +153,6 @@ def _slugify(value: str) -> str:
     return slug[:80] or "topic"
 
 
-def _amazon_cta_rebalance_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
-    checks = {
-        "product_page_amazon_banner": False,
-        "product_page_amazon_before_rakuten": False,
-        "market_ranking_amazon_button": False,
-        "aixtube_amazon_box": False,
-        "books_ranking_amazon_button": False,
-    }
-
-    product = _read("webapps/index.php")
-    checks["product_page_amazon_banner"] = "/images/amazon.png" in product and "to=amazon" in product
-    checks["product_page_amazon_before_rakuten"] = _contains_in_order(product, "$amazon_click_url", "$rakuten_click_url")
-
-    market = _read("webapps/market_ranking.php")
-    checks["market_ranking_amazon_button"] = "Amazonで見る" in market and "amazon_click_url" in market
-
-    aixtube = _read("webapps/aixtube.php")
-    checks["aixtube_amazon_box"] = "Amazonを優先表示しています" in aixtube and "Amazonで探す" in aixtube
-
-    books = _read("webapps/books_ranking.php")
-    checks["books_ranking_amazon_button"] = "Amazonで見る" in books and "amazon_click_url" in books
-
-    ok = all(checks.values())
-    artifacts = [
-        {"path": str(PROJECT_DIR / "webapps/index.php"), "kind": "php"},
-        {"path": str(PROJECT_DIR / "webapps/market_ranking.php"), "kind": "php"},
-        {"path": str(PROJECT_DIR / "webapps/aixtube.php"), "kind": "php"},
-        {"path": str(PROJECT_DIR / "webapps/books_ranking.php"), "kind": "php"},
-    ]
-    title = str(improvement_job.get("title") or "Amazon CTA rebalance")
-    if ok:
-        return _result(
-            ok=True,
-            status="ok",
-            items=1,
-            note=f"{title}: Amazon優先CTAを確認しました",
-            metrics={"checks_passed": sum(1 for value in checks.values() if value), "checks_total": len(checks), **checks},
-            artifacts=artifacts,
-        )
-    return _result(
-        ok=False,
-        status="failed",
-        items=0,
-        note=f"{title}: Amazon優先CTAの検証に失敗しました",
-        metrics={"checks_passed": sum(1 for value in checks.values() if value), "checks_total": len(checks), **checks},
-        artifacts=artifacts,
-        error=json.dumps({k: v for k, v in checks.items() if not v}, ensure_ascii=False),
-    )
-
-
-def _amazon_product_growth_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
-    payload = dict(improvement_job.get("payload") or {})
-    product = str(payload.get("product") or "").strip()
-    pid = str(payload.get("pid") or "").strip()
-    jan = str(payload.get("jan") or "").strip()
-    source = str(payload.get("source") or "").strip()
-    checks: dict[str, Any] = {"product": product, "pid": pid, "jan": jan, "source": source}
-    artifacts: list[dict[str, Any]] = []
-
-    product_payload: dict[str, Any] = {}
-    if pid:
-        product_payload = _api_get(f"products/{pid}")
-    elif jan:
-        product_payload = _api_get("products", {"q": jan, "limit": 1})
-    elif product:
-        product_payload = _api_get("products", {"q": product, "limit": 1})
-
-    checks["api_ok"] = bool(product_payload.get("ok"))
-    item = product_payload.get("item") or ((product_payload.get("items") or [{}])[0] if isinstance(product_payload.get("items"), list) else {})
-    checks["product_found"] = bool(item)
-    checks["amazon_tracking_available"] = "amazon_click_url" in _read("webapps/index.php") and "to=amazon" in _read("webapps/index.php")
-
-    title = str(improvement_job.get("title") or product or "Amazon product growth")
-    note_lines = [
-        f"# {title}",
-        "",
-        "kgrowth Amazon product growth execution record.",
-        "",
-        f"- product: {product}",
-        f"- pid: {pid}",
-        f"- jan: {jan}",
-        f"- source: {source}",
-        f"- api_ok: {checks['api_ok']}",
-        f"- product_found: {checks['product_found']}",
-        f"- amazon_tracking_available: {checks['amazon_tracking_available']}",
-    ]
-    artifacts.append(_write_artifact(str(improvement_job.get("kind") or "amazon_product_growth"), str(improvement_job.get("id") or ""), "md", "\n".join(note_lines) + "\n"))
-    ok = bool(checks["product_found"] and checks["amazon_tracking_available"])
-    return _result(
-        ok=ok,
-        status="ok" if ok else "failed",
-        items=1 if ok else 0,
-        note=f"{title}: Amazon導線強化チェック{'完了' if ok else '失敗'}",
-        metrics=checks,
-        artifacts=artifacts,
-        error="" if ok else "product not found or amazon tracking unavailable",
-    )
-
-
 def _amazon_hub_article_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
     payload = dict(improvement_job.get("payload") or {})
     topic = str(payload.get("topic") or "").strip()
@@ -406,11 +307,7 @@ def execute_improvement_job(
     if not kind:
         return _result(ok=False, status="failed", items=0, note="improvement_job.kind is required", error="missing kind")
 
-    if kind in {"amazon_cta_rebalance", "aixtube_amazon_cta"}:
-        result = _amazon_cta_rebalance_job(job, dry_run)
-    elif kind == "amazon_product_growth":
-        result = _amazon_product_growth_job(job, dry_run)
-    elif kind == "amazon_hub_article":
+    if kind == "amazon_hub_article":
         result = _amazon_hub_article_job(job, dry_run)
     elif kind == "aixtube_search_snippet":
         result = _aixtube_search_snippet_job(job, dry_run)
