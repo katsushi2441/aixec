@@ -578,8 +578,8 @@ a.badge:hover{background:var(--accent-dark)}
 .related-product-desc{font-size:12px;color:var(--muted);line-height:1.55;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .related-product-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .related-product-actions a{font-size:11px;font-weight:700;border-radius:999px;padding:5px 8px;text-decoration:none;border:1px solid var(--line);color:var(--muted)}
-.related-product-actions a.primary{background:#bf0000;color:#fff;border-color:#bf0000}
 .related-product-actions a.amazon{background:#111827;color:#fff;border-color:#111827}
+.related-product-actions a.rakuten{background:#fff;color:#991b1b;border-color:#fecaca}
 .server-list{display:grid;gap:2px}
 
 .avatar{width:42px;height:42px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#fff;flex-shrink:0}
@@ -765,8 +765,8 @@ a.badge:hover{background:var(--accent-dark)}
               <a class="related-product-title" href="<?php echo h(product_page_url($product)); ?>"><?php echo h($product_name); ?></a>
               <?php if ($product_desc !== ''): ?><div class="related-product-desc"><?php echo h($product_desc); ?></div><?php endif; ?>
               <div class="related-product-actions">
-                <?php if (!empty($product['rakuten_url'])): ?><a class="primary" href="<?php echo h(product_click_url($product, 'rakuten')); ?>" target="_blank" rel="nofollow sponsored noopener">楽天で見る</a><?php endif; ?>
                 <a class="amazon" href="<?php echo h(product_click_url($product, 'amazon')); ?>" target="_blank" rel="nofollow sponsored noopener">Amazonで探す</a>
+                <?php if (!empty($product['rakuten_url'])): ?><a class="rakuten" href="<?php echo h(product_click_url($product, 'rakuten')); ?>" target="_blank" rel="nofollow sponsored noopener">楽天でも見る</a><?php endif; ?>
               </div>
             </div>
           </div>

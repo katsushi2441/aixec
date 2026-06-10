@@ -331,11 +331,11 @@ a{color:inherit}
     <?php foreach ($click_ranking as $idx => $item): $url = rakuten_click_url($item); $amazon_url = amazon_click_url($item); ?>
     <article class="card">
       <div class="rank">#<?php echo $idx + 1; ?><small><?php echo (int)$item['_clicks']; ?> clicks</small></div>
-      <a class="cover" href="<?php echo h($url); ?>" target="_blank" rel="nofollow sponsored noopener">
+      <a class="cover" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener">
         <img src="<?php echo h(!empty($item['image_url']) ? $item['image_url'] : '/images/noimage.jpg'); ?>" alt="<?php echo h($item['name']); ?>">
       </a>
       <div class="body">
-        <a class="title" href="<?php echo h($url); ?>" target="_blank" rel="nofollow sponsored noopener"><?php echo h($item['name']); ?></a>
+        <a class="title" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener"><?php echo h($item['name']); ?></a>
         <div class="meta"><?php echo h($item['maker']); ?><br><?php echo h($item['model_number']); ?></div>
         <div class="price"><?php echo h(yen($item['sale_price'])); ?></div>
         <div class="actions">
@@ -370,11 +370,11 @@ a{color:inherit}
     ?>
     <article class="card">
       <div class="rank">#<?php echo $idx + 1; ?><small><?php echo h($book_review !== '' ? '★'.$book_review : ''); ?></small></div>
-      <a class="cover" href="<?php echo h($book_url); ?>" target="_blank" rel="nofollow sponsored noopener">
+      <a class="cover" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener">
         <img src="<?php echo h($book_image); ?>" alt="<?php echo h($book_title); ?>" loading="lazy">
       </a>
       <div class="body">
-        <a class="title" href="<?php echo h($book_url); ?>" target="_blank" rel="nofollow sponsored noopener"><?php echo h($book_title); ?></a>
+        <a class="title" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener"><?php echo h($book_title); ?></a>
         <div class="meta"><?php echo h($book_author); ?><?php if ($book_publisher !== ''): ?><br><?php echo h($book_publisher); ?><?php endif; ?></div>
         <div class="price"><?php echo h(yen($book['item_price'])); ?></div>
         <div class="actions">
