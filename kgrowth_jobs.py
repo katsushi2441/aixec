@@ -197,36 +197,6 @@ def _amazon_hub_article_job(improvement_job: dict[str, Any], dry_run: bool) -> d
     )
 
 
-def _aixtube_search_snippet_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
-    payload = dict(improvement_job.get("payload") or {})
-    query = str(payload.get("query") or "").strip()
-    page = str(payload.get("page") or "").strip()
-    status_code, html = _http_get(page) if page else (0, "")
-    checks = {
-        "status_code": status_code,
-        "has_title": "<title>" in html.lower(),
-        "has_description": 'name="description"' in html.lower(),
-        "has_amazon": "to=amazon" in html.lower() or "amazon" in html.lower(),
-        "query_seen": bool(query and query.lower() in html.lower()),
-    }
-    artifact = _write_artifact(
-        "aixtube_search_snippet",
-        str(improvement_job.get("id") or ""),
-        "json",
-        json.dumps({"query": query, "page": page, "checks": checks, "checked_at": _now()}, ensure_ascii=False, indent=2),
-    )
-    ok = status_code == 200 and checks["has_title"] and checks["has_description"] and checks["has_amazon"]
-    return _result(
-        ok=ok,
-        status="ok" if ok else "failed",
-        items=1 if ok else 0,
-        note=f"{query or page}: AIxTube検索スニペット確認{'完了' if ok else '失敗'}",
-        metrics=checks,
-        artifacts=[artifact],
-        error="" if ok else "AIxTube page snippet check failed",
-    )
-
-
 def _buzblogger_search_intent_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
     root = Path("/home/kojima/work/buzblogger")
     checks = {
@@ -309,8 +279,6 @@ def execute_improvement_job(
 
     if kind == "amazon_hub_article":
         result = _amazon_hub_article_job(job, dry_run)
-    elif kind == "aixtube_search_snippet":
-        result = _aixtube_search_snippet_job(job, dry_run)
     elif kind == "buzblogger_search_intent":
         result = _buzblogger_search_intent_job(job, dry_run)
     elif kind == "aixsns_register_noindex":
