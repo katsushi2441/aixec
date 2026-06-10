@@ -45,18 +45,20 @@ foreach($static_pages as $file => $priority){
     echo "</url>\n";
 }
 
-$posts_res = sitemap_api_get('/posts', array('limit' => 200, 'offset' => 0));
+$posts_res = sitemap_api_get('/posts', array('limit' => 200, 'offset' => 0, 'sitemap' => 1));
 if(!empty($posts_res['items']) && is_array($posts_res['items'])){
     foreach($posts_res['items'] as $post){
-        if(empty($post['id'])) continue;
+        if(empty($post['id']) || empty($post['slug'])) continue;
+        if(($post['author'] ?? '') === 'register') continue;
+        $priority = (strpos((string)($post['kind'] ?? ''), 'kgrowth-') === 0) ? '0.8' : '0.7';
         echo "<url>\n";
-        echo "<loc>".sx($base_url."/sns.php?id=".(int)$post['id'])."</loc>\n";
+        echo "<loc>".sx($base_url."/sns.php?slug=".rawurlencode($post['slug']))."</loc>\n";
         if(!empty($post['updated_at'])){
             echo "<lastmod>".sx(date('Y-m-d', strtotime($post['updated_at'])))."</lastmod>\n";
         } else {
             echo "<lastmod>".date('Y-m-d')."</lastmod>\n";
         }
-        echo "<priority>0.7</priority>\n";
+        echo "<priority>".$priority."</priority>\n";
         echo "</url>\n";
     }
 }

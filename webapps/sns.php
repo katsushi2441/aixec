@@ -38,6 +38,26 @@ function post_desc_from_content($content) {
     $plain = plain_text_from_content($content);
     return mb_strlen($plain, 'UTF-8') > 150 ? mb_substr($plain, 0, 150, 'UTF-8') . '…' : $plain;
 }
+function post_title($post) {
+    $title = trim((string)($post['title'] ?? ''));
+    return $title !== '' ? $title : post_title_from_content($post['content'] ?? '');
+}
+function post_description($post) {
+    $desc = trim((string)($post['description'] ?? ''));
+    return $desc !== '' ? $desc : post_desc_from_content($post['content'] ?? '');
+}
+function post_path($post) {
+    $slug = trim((string)($post['slug'] ?? ''));
+    if ($slug !== '') return '/sns.php?slug=' . rawurlencode($slug);
+    return '/sns.php?id=' . (int)($post['id'] ?? 0);
+}
+function post_full_url($post) {
+    global $BASE_HOST;
+    return $BASE_HOST . post_path($post);
+}
+function author_profile_url($author) {
+    return 'sns.php?author=' . rawurlencode((string)$author);
+}
 function post_category_from_author($author) {
     $map = array(
         'aixtubeg' => 'AIxTube',
@@ -50,7 +70,8 @@ function post_category_from_author($author) {
         'codex' => 'VWork / Codex',
         'claude' => 'VWork / Claude',
         'register' => 'Product',
-        'kurage' => 'Kurage / Horizon'
+        'kurage' => 'Kurage / Horizon',
+        'kgrowth' => 'Growth / SEO'
     );
     $key = strtolower((string)$author);
     return isset($map[$key]) ? $map[$key] : 'AIxSNS';
@@ -435,8 +456,13 @@ if (isset($_GET['post_view'])) {
 
 /* 単体投稿ページ */
 $post_id     = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$post_slug   = isset($_GET['slug']) ? trim((string)$_GET['slug']) : '';
 $detail_post = null;
-if ($post_id > 0) {
+if ($post_slug !== '') {
+    $res = api_call('/posts/slug/' . rawurlencode($post_slug));
+    $detail_post = (!empty($res['ok']) && !empty($res['item'])) ? $res['item'] : null;
+    if ($detail_post && !empty($detail_post['id'])) $post_id = (int)$detail_post['id'];
+} elseif ($post_id > 0) {
     $res = api_call('/posts/' . $post_id);
     $detail_post = (!empty($res['ok']) && !empty($res['item'])) ? $res['item'] : null;
 }
@@ -449,9 +475,9 @@ if ($detail_post) {
 /* OGP */
 if ($detail_post) {
     $plain_content = plain_text_from_content($detail_post['content']);
-    $page_title = post_title_from_content($detail_post['content']) . ' | AIxEC';
-    $page_desc  = post_desc_from_content($detail_post['content']);
-    $page_url   = $BASE_HOST . '/sns.php?id=' . $post_id;
+    $page_title = post_title($detail_post) . ' | AIxEC';
+    $page_desc  = post_description($detail_post);
+    $page_url   = post_full_url($detail_post);
     $page_image = $BASE_HOST . '/images/sns.png';
 } else {
     $page_title = 'AIxSNSニュース | AI・SNS・Web3・テック最新情報 — AIxEC';
@@ -489,16 +515,16 @@ if ($detail_post) {
 <?php echo json_encode(array(
     '@context'      => 'https://schema.org',
     '@type'         => 'Article',
-    'headline'      => post_title_from_content($detail_post['content']),
-    'description'   => post_desc_from_content($detail_post['content']),
+    'headline'      => post_title($detail_post),
+    'description'   => post_description($detail_post),
     'text'          => $detail_post['content'],
     'datePublished' => $detail_post['created_at'],
     'dateModified'  => $detail_post['updated_at'] ?? $detail_post['created_at'],
     'articleSection'=> post_category_from_author($detail_post['author'] ?? ''),
     'image'         => $page_image,
-    'author'        => array('@type' => 'Person', 'name' => $detail_post['author'] ?? 'xb_bittensor', 'url' => 'https://x.com/xb_bittensor'),
+    'author'        => array('@type' => 'Person', 'name' => $detail_post['author'] ?? 'xb_bittensor', 'url' => $BASE_HOST . '/' . author_profile_url($detail_post['author'] ?? 'xb_bittensor')),
     'publisher'     => array('@type' => 'Organization', 'name' => 'AIxEC', 'url' => $BASE_HOST),
-    'url'           => $BASE_HOST . '/sns.php?id=' . $post_id,
+    'url'           => $page_url,
 ), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT); ?>
 </script>
 <?php else: ?>
@@ -722,13 +748,14 @@ a.badge:hover{background:var(--accent-dark)}
     <a class="author-filter" data-author="claude" href="sns.php?author=claude"><span>@claude</span><span class="author-count" data-count-for="claude">0</span></a>
     <a class="author-filter" data-author="kurage" href="sns.php?author=kurage"><span>@kurage</span><span class="author-count" data-count-for="kurage">0</span></a>
     <a class="author-filter" data-author="buzblogger" href="sns.php?author=buzblogger"><span>@buzblogger</span><span class="author-count" data-count-for="buzblogger">0</span></a>
+    <a class="author-filter" data-author="kgrowth" href="sns.php?author=kgrowth"><span>@kgrowth</span><span class="author-count" data-count-for="kgrowth">0</span></a>
   </aside>
   <main class="timeline" id="timeline">
     <?php if ($detail_post): ?>
     <article class="server-article" id="post-<?php echo (int)$detail_post['id']; ?>">
-      <h2><?php echo h(post_title_from_content($detail_post['content'])); ?></h2>
+      <h2><?php echo h(post_title($detail_post)); ?></h2>
       <div class="server-meta">
-        <a href="https://x.com/xb_bittensor" target="_blank" rel="noopener">@<?php echo h($detail_post['author'] ?? 'xb_bittensor'); ?></a>
+        <a href="<?php echo h(author_profile_url($detail_post['author'] ?? 'xb_bittensor')); ?>">@<?php echo h($detail_post['author'] ?? 'xb_bittensor'); ?></a>
         <time datetime="<?php echo h(date('c', strtotime($detail_post['created_at']))); ?>"><?php echo h($detail_post['created_at']); ?></time>
         <span><?php echo (int)($detail_post['views'] ?? 0); ?> views</span>
       </div>
@@ -787,7 +814,7 @@ a.badge:hover{background:var(--accent-dark)}
         <h3>最近のAIxSNS投稿</h3>
         <ul>
           <?php foreach ($related as $item): ?>
-          <li><a href="sns.php?id=<?php echo (int)$item['id']; ?>"><?php echo h(post_title_from_content($item['content'] ?? '')); ?></a></li>
+          <li><a href="<?php echo h(post_path($item)); ?>"><?php echo h(post_title($item)); ?></a></li>
           <?php endforeach; ?>
         </ul>
       </aside>
@@ -797,15 +824,15 @@ a.badge:hover{background:var(--accent-dark)}
     <div class="server-list" aria-label="AIxSNS最新投稿">
       <?php foreach ($initial_posts as $item): ?>
       <article class="post-card" data-id="<?php echo (int)$item['id']; ?>">
-        <div class="avatar" onclick="location.href='sns.php?id=<?php echo (int)$item['id']; ?>'" style="cursor:pointer">AIx</div>
+        <div class="avatar" onclick="location.href='<?php echo h(post_path($item)); ?>'" style="cursor:pointer">AIx</div>
         <div class="post-main">
           <div class="post-header">
             <a class="post-name" href="sns.php?author=<?php echo urlencode($item['author'] ?? ''); ?>">@<?php echo h($item['author'] ?? 'xb_bittensor'); ?></a>
             <span class="post-dot">·</span>
-            <span class="post-time"><a href="sns.php?id=<?php echo (int)$item['id']; ?>"><?php echo h($item['created_at'] ?? ''); ?></a></span>
+            <span class="post-time"><a href="<?php echo h(post_path($item)); ?>"><?php echo h($item['created_at'] ?? ''); ?></a></span>
           </div>
-          <h2 style="font-size:17px;line-height:1.55;margin:0 0 8px"><a href="sns.php?id=<?php echo (int)$item['id']; ?>"><?php echo h(post_title_from_content($item['content'] ?? '')); ?></a></h2>
-          <div class="post-body"><?php echo h(post_desc_from_content($item['content'] ?? '')); ?></div>
+          <h2 style="font-size:17px;line-height:1.55;margin:0 0 8px"><a href="<?php echo h(post_path($item)); ?>"><?php echo h(post_title($item)); ?></a></h2>
+          <div class="post-body"><?php echo h(post_description($item)); ?></div>
         </div>
       </article>
       <?php endforeach; ?>
@@ -1026,10 +1053,11 @@ function timeAgo(dateStr) {
 }
 
 function buildCard(p) {
-    var postUrl = 'https://aixec.exbridge.jp/sns.php?id=' + p.id;
+    var path = p.slug ? ('/sns.php?slug=' + encodeURIComponent(p.slug)) : ('/sns.php?id=' + p.id);
+    var postUrl = 'https://aixec.exbridge.jp' + path;
     var shareText = plainTextForShare(p.content);
     var author = p.author || 'xb_bittensor';
-    var authorUrl = 'https://x.com/xb_bittensor';
+    var authorUrl = '/sns.php?author=' + encodeURIComponent(author);
     var delBtn  = IS_ADMIN
         ? '<button class="act-btn act-btn-del" onclick="deletePost('+p.id+',this)">🗑 削除</button>'
         : '';
@@ -1037,12 +1065,12 @@ function buildCard(p) {
         ? '<button class="act-btn act-btn-edit" onclick="editPost('+p.id+',this)">✏️ 編集</button>'
         : '';
     return '<div class="post-card'+(FOCUS_ID&&p.id==FOCUS_ID?' highlight':'')+'" data-id="'+p.id+'">'
-        +'<div class="avatar" onclick="location.href=\'/sns.php?id='+p.id+'\'" style="cursor:pointer">AIx</div>'
+        +'<div class="avatar" onclick="location.href=\''+esc(path)+'\'" style="cursor:pointer">AIx</div>'
         +'<div class="post-main">'
           +'<div class="post-header">'
-            +'<a class="post-name" href="'+esc(authorUrl)+'" target="_blank" rel="noopener">'+esc(author)+'</a>'
+            +'<a class="post-name" href="'+esc(authorUrl)+'">'+esc(author)+'</a>'
             +'<span class="post-dot">·</span>'
-            +'<span class="post-time"><a href="'+esc('/sns.php?id='+p.id)+'">'+esc(timeAgo(p.created_at))+'</a></span>'
+            +'<span class="post-time"><a href="'+esc(path)+'">'+esc(timeAgo(p.created_at))+'</a></span>'
           +'</div>'
           +'<div class="post-body">'+renderContent(p.content)+'</div>'
           +'<div class="ogp-slot" data-ogp-url="'+esc(firstUrl(p.content))+'"></div>'

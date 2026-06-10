@@ -252,24 +252,60 @@ def _amazon_hub_article_job(improvement_job: dict[str, Any], dry_run: bool) -> d
     ]
     artifact = _write_artifact("amazon_hub_article", str(improvement_job.get("id") or slug), "md", "\n".join(lines))
     ok = bool(topic)
-    return _result(
+    post = _publish_sns_article(
+        author="kgrowth",
+        title=title,
+        description=f"{topic}の選び方、比較ポイント、Amazonで探す導線をAIxECの商品データから整理します。" if topic else title,
+        content="\n".join(lines),
+        slug="kgrowth-hub-" + slug,
+        kind="kgrowth-amazon-hub",
+        source_url="",
+        dry_run=dry_run,
+    ) if ok else {"ok": False}
+    ok = ok and bool(post.get("ok"))
+    result = _result(
         ok=ok,
         status="ok" if ok else "failed",
         items=1 if ok else 0,
         note=f"{title}: ハブ記事ドラフト生成完了",
         metrics={"topic": topic, "slug": slug, "related_products": len(items)},
-        artifacts=[artifact],
-        error="" if ok else "topic is empty",
+        artifacts=[artifact, {"path": post.get("url", ""), "kind": "url"}],
+        error="" if ok else "topic is empty or AIxSNS post failed",
     )
+    result["sns_post"] = post
+    return result
 
 
-def _post_aixsns_article(author: str, content: str, dry_run: bool) -> dict[str, Any]:
+def _publish_sns_article(
+    *,
+    author: str,
+    title: str,
+    description: str,
+    content: str,
+    slug: str,
+    kind: str,
+    source_url: str = "",
+    dry_run: bool,
+) -> dict[str, Any]:
+    article_url = SITE_BASE + "/sns.php?" + urllib.parse.urlencode({"slug": slug})
     if dry_run:
-        return {"ok": True, "dry_run": True, "id": None, "status_code": 0}
-    post = _http_post_json(SNS_POST_URL, {"author": author, "content": content}, timeout=30)
+        return {"ok": True, "dry_run": True, "id": None, "slug": slug, "url": article_url, "status_code": 0}
+    payload = {
+        "author": author,
+        "title": title,
+        "description": description,
+        "content": content,
+        "slug": slug,
+        "kind": kind,
+        "source_url": source_url,
+    }
+    post = _http_post_json(SNS_POST_URL, payload, timeout=30)
+    item = post.get("item") if isinstance(post.get("item"), dict) else {}
     return {
         "ok": bool(post.get("ok")),
-        "id": (post.get("item") or {}).get("id") if isinstance(post.get("item"), dict) else None,
+        "id": item.get("id"),
+        "slug": item.get("slug") or slug,
+        "url": SITE_BASE + "/sns.php?" + urllib.parse.urlencode({"slug": item.get("slug") or slug}),
         "status_code": post.get("status_code"),
         "raw": post,
     }
@@ -283,6 +319,8 @@ def _search_query_answer_article_job(improvement_job: dict[str, Any], dry_run: b
         return _result(ok=False, status="failed", items=0, note="query and page are required", error="missing query/page")
     amazon_url = SITE_BASE + "/go.php?" + urllib.parse.urlencode({"to": "amazon", "kw": query, "from": "kgrowth-search-query"})
     title = f"{query}を探している人へ"
+    slug = "kgrowth-" + _slugify(query)
+    description = f"{query}で検索した人向けに、AIxECの関連ページとAmazonで比較する導線をまとめます。"
     content = "\n".join(
         [
             title,
@@ -298,7 +336,16 @@ def _search_query_answer_article_job(improvement_job: dict[str, Any], dry_run: b
         ]
     )
     artifact = _write_artifact("search_query_answer_article", str(improvement_job.get("id") or ""), "md", content)
-    post = _post_aixsns_article("kgrowth", content, dry_run)
+    post = _publish_sns_article(
+        author="kgrowth",
+        title=title,
+        description=description,
+        content=content,
+        slug=slug,
+        kind="kgrowth-search-query",
+        source_url=page,
+        dry_run=dry_run,
+    )
     ok = bool(post.get("ok"))
     result = _result(
         ok=ok,
@@ -306,7 +353,7 @@ def _search_query_answer_article_job(improvement_job: dict[str, Any], dry_run: b
         items=1 if ok else 0,
         note=f"{query}: 検索意図回答記事{'dry-run生成' if dry_run else '投稿'}完了",
         metrics={"query": query, "page": page, "position": payload.get("position"), "impressions": payload.get("impressions")},
-        artifacts=[artifact],
+        artifacts=[artifact, {"path": post.get("url", ""), "kind": "url"}],
         error="" if ok else "AIxSNS post failed",
     )
     result["sns_post"] = post
@@ -331,9 +378,12 @@ def _affiliate_product_article_job(improvement_job: dict[str, Any], dry_run: boo
         params["model"] = model
     amazon_url = SITE_BASE + "/go.php?" + urllib.parse.urlencode(params)
     internal_url = source if source.startswith("http") else (SITE_BASE + source if source.startswith("/") else "")
+    title = f"{product}を比較する"
+    slug = "kgrowth-product-" + _slugify(product)
+    description = f"実クリックがある商品「{product}」について、AIxEC内ページとAmazon比較導線を整理します。"
     content = "\n".join(
         [
-            f"{product}を比較する",
+            title,
             "",
             "simpletrackのbot除外済み実クリックで反応が出ている商品です。購入検討者は型番・JAN・商品名で探している可能性が高いため、AIxEC内の関連ページとAmazon導線をまとめます。",
             "",
@@ -348,7 +398,16 @@ def _affiliate_product_article_job(improvement_job: dict[str, Any], dry_run: boo
     )
     content = "\n".join(line for line in content.splitlines() if line != "")
     artifact = _write_artifact("affiliate_product_article", str(improvement_job.get("id") or ""), "md", content)
-    post = _post_aixsns_article("kgrowth", content, dry_run)
+    post = _publish_sns_article(
+        author="kgrowth",
+        title=title,
+        description=description,
+        content=content,
+        slug=slug,
+        kind="kgrowth-affiliate-product",
+        source_url=internal_url,
+        dry_run=dry_run,
+    )
     ok = bool(post.get("ok"))
     result = _result(
         ok=ok,
@@ -356,7 +415,7 @@ def _affiliate_product_article_job(improvement_job: dict[str, Any], dry_run: boo
         items=1 if ok else 0,
         note=f"{product}: 実クリック商品記事{'dry-run生成' if dry_run else '投稿'}完了",
         metrics={"product": product, "pid": pid, "jan": jan, "model": model, "clicks": payload.get("clicks", 0)},
-        artifacts=[artifact],
+        artifacts=[artifact, {"path": post.get("url", ""), "kind": "url"}],
         error="" if ok else "AIxSNS post failed",
     )
     result["sns_post"] = post

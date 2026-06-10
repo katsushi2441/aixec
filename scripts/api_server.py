@@ -676,9 +676,21 @@ def migrate():
         if 'views' not in columns:
             conn.execute("ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0")
             conn.execute("UPDATE posts SET views = 0 WHERE views IS NULL")
+        if 'slug' not in columns:
+            conn.execute("ALTER TABLE posts ADD COLUMN slug TEXT")
+        if 'title' not in columns:
+            conn.execute("ALTER TABLE posts ADD COLUMN title TEXT")
+        if 'description' not in columns:
+            conn.execute("ALTER TABLE posts ADD COLUMN description TEXT")
+        if 'kind' not in columns:
+            conn.execute("ALTER TABLE posts ADD COLUMN kind TEXT DEFAULT 'post'")
+        if 'source_url' not in columns:
+            conn.execute("ALTER TABLE posts ADD COLUMN source_url TEXT")
         conn.execute("UPDATE posts SET author = 'AIxTubeG' WHERE lower(author) = 'aixtubeg'")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_created_at_id ON posts(created_at DESC, id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_author_created_at_id ON posts(author, created_at DESC, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_kind_created_at_id ON posts(kind, created_at DESC, id DESC)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug) WHERE slug IS NOT NULL AND slug <> ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_products_jan ON products(jan)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_products_model_number ON products(model_number)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_products_internal_sku ON products(internal_sku)")
@@ -688,6 +700,27 @@ def migrate():
 
 def row_dict(row):
     return dict(row) if row else None
+
+
+def post_slugify(value):
+    slug = re.sub(r"[^0-9A-Za-zぁ-んァ-ン一-龥]+", "-", str(value or "").lower()).strip("-")
+    return (slug[:90].strip("-") or "post")
+
+
+def unique_post_slug(conn, slug, current_id=None):
+    base = post_slugify(slug)
+    candidate = base
+    suffix = 2
+    while True:
+        if current_id is None:
+            row = conn.execute("SELECT id FROM posts WHERE slug = ?", (candidate,)).fetchone()
+        else:
+            row = conn.execute("SELECT id FROM posts WHERE slug = ? AND id <> ?", (candidate, int(current_id))).fetchone()
+        if not row:
+            return candidate
+        tail = f"-{suffix}"
+        candidate = (base[: max(1, 90 - len(tail))].rstrip("-") + tail)
+        suffix += 1
 
 
 def attach_image_urls(conn, items):
@@ -1393,16 +1426,29 @@ class Handler(BaseHTTPRequestHandler):
                     offset = max(0, int(qs.get('offset', ['0'])[0]))
                     author = (qs.get('author', [''])[0] or '').strip()
                     exclude_author = (qs.get('exclude_author', [''])[0] or '').strip()
+                    kind = (qs.get('kind', [''])[0] or '').strip()
+                    sitemap = (qs.get('sitemap', [''])[0] or '').strip() in ('1', 'true', 'yes')
                     with connect() as conn:
+                        where = []
+                        params = []
                         if author:
-                            rows  = conn.execute('SELECT * FROM posts WHERE author = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (author, limit, offset)).fetchall()
-                            total = conn.execute('SELECT COUNT(*) FROM posts WHERE author = ?', (author,)).fetchone()[0]
+                            where.append('author = ?')
+                            params.append(author)
                         elif exclude_author:
-                            rows  = conn.execute('SELECT * FROM posts WHERE author <> ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (exclude_author, limit, offset)).fetchall()
-                            total = conn.execute('SELECT COUNT(*) FROM posts WHERE author <> ?', (exclude_author,)).fetchone()[0]
-                        else:
-                            rows  = conn.execute('SELECT * FROM posts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
-                            total = conn.execute('SELECT COUNT(*) FROM posts').fetchone()[0]
+                            where.append('author <> ?')
+                            params.append(exclude_author)
+                        if kind:
+                            where.append('kind = ?')
+                            params.append(kind)
+                        if sitemap:
+                            where.append("COALESCE(slug, '') <> ''")
+                            where.append("COALESCE(author, '') <> 'register'")
+                        where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
+                        rows = conn.execute(
+                            'SELECT * FROM posts' + where_sql + ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?',
+                            (*params, limit, offset),
+                        ).fetchall()
+                        total = conn.execute('SELECT COUNT(*) FROM posts' + where_sql, tuple(params)).fetchone()[0]
                     payload = {'ok': True, 'items': [row_dict(r) for r in rows], 'total': total}
                     _cache_set(memory_cache_key, payload, ttl=_POSTS_CACHE_TTL)
                     _disk_cache_set("posts", cache_key, payload)
@@ -1416,6 +1462,32 @@ class Handler(BaseHTTPRequestHandler):
                     raise
                 finally:
                     lock.release()
+                self.send_json(payload)
+                return
+            if path.startswith('/posts/slug/'):
+                post_slug = unquote(path.split('/', 3)[3]).strip()
+                if not post_slug:
+                    self.send_json({'ok': False, 'error': 'invalid slug'}, 400)
+                    return
+                cache_key = self.path
+                memory_cache_key = "post_detail:" + cache_key
+                cached = _cache_get(memory_cache_key, ttl=_POST_DETAIL_CACHE_TTL)
+                if cached is not None:
+                    self.send_json(cached)
+                    return
+                disk_cached = _disk_cache_get("post_detail", cache_key, ttl=_POST_DETAIL_CACHE_TTL)
+                if disk_cached is not None:
+                    _cache_set(memory_cache_key, disk_cached, ttl=_POST_DETAIL_CACHE_TTL)
+                    self.send_json(disk_cached)
+                    return
+                with connect() as conn:
+                    row = conn.execute('SELECT * FROM posts WHERE slug = ?', (post_slug,)).fetchone()
+                if not row:
+                    self.send_json({'ok': False, 'error': 'post not found'}, 404)
+                    return
+                payload = {'ok': True, 'item': row_dict(row)}
+                _cache_set(memory_cache_key, payload, ttl=_POST_DETAIL_CACHE_TTL)
+                _disk_cache_set("post_detail", cache_key, payload)
                 self.send_json(payload)
                 return
             if path.startswith('/posts/'):
@@ -1808,8 +1880,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/posts':
                 content = (data.get('content') or '').strip()
                 author = (data.get('author') or 'xb_bittensor').strip()
+                title = (data.get('title') or '').strip()
+                description = (data.get('description') or '').strip()
+                kind = (data.get('kind') or 'post').strip()
+                source_url = (data.get('source_url') or '').strip()
+                requested_slug = (data.get('slug') or title or content[:80]).strip()
                 if not re.match(r'^[A-Za-z0-9_\\-]{1,32}$', author):
                     author = 'xb_bittensor'
+                if not re.match(r'^[A-Za-z0-9_.\\-]{1,64}$', kind):
+                    kind = 'post'
                 if not content:
                     self.send_json({'ok': False, 'error': 'content is required'}, 400)
                     return
@@ -1822,9 +1901,13 @@ class Handler(BaseHTTPRequestHandler):
                         if recent:
                             self.send_json({'ok': True, 'skipped': True, 'reason': 'AIxTubeG post throttled', 'item': row_dict(recent)}, 200)
                             return
+                    slug = unique_post_slug(conn, requested_slug) if requested_slug else None
                     cur = conn.execute(
-                        "INSERT INTO posts (author, content, created_at, updated_at) VALUES (?, ?, DATETIME('now', 'localtime'), DATETIME('now', 'localtime'))",
-                        (author, content)
+                        """
+                        INSERT INTO posts (author, content, slug, title, description, kind, source_url, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, DATETIME('now', 'localtime'), DATETIME('now', 'localtime'))
+                        """,
+                        (author, content, slug, title, description, kind, source_url)
                     )
                     conn.commit()
                     row = conn.execute('SELECT * FROM posts WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -1847,9 +1930,22 @@ class Handler(BaseHTTPRequestHandler):
                     author = (data.get('author') or current['author'] or 'xb_bittensor').strip()
                     if not re.match(r'^[A-Za-z0-9_\\-]{1,32}$', author):
                         author = current['author'] or 'xb_bittensor'
+                    title = (data.get('title') if 'title' in data else current['title'] if 'title' in current.keys() else '') or ''
+                    description = (data.get('description') if 'description' in data else current['description'] if 'description' in current.keys() else '') or ''
+                    kind = (data.get('kind') if 'kind' in data else current['kind'] if 'kind' in current.keys() else 'post') or 'post'
+                    source_url = (data.get('source_url') if 'source_url' in data else current['source_url'] if 'source_url' in current.keys() else '') or ''
+                    slug_input = (data.get('slug') if 'slug' in data else current['slug'] if 'slug' in current.keys() else '') or title or content[:80]
+                    slug = unique_post_slug(conn, slug_input, int(post_id)) if slug_input else None
+                    if not re.match(r'^[A-Za-z0-9_.\\-]{1,64}$', str(kind)):
+                        kind = current['kind'] if 'kind' in current.keys() else 'post'
                     conn.execute(
-                        "UPDATE posts SET author = ?, content = ?, updated_at = DATETIME('now', 'localtime') WHERE id = ?",
-                        (author, content, int(post_id))
+                        """
+                        UPDATE posts
+                        SET author = ?, content = ?, slug = ?, title = ?, description = ?, kind = ?, source_url = ?,
+                            updated_at = DATETIME('now', 'localtime')
+                        WHERE id = ?
+                        """,
+                        (author, content, slug, str(title).strip(), str(description).strip(), str(kind).strip(), str(source_url).strip(), int(post_id))
                     )
                     conn.commit()
                     row = conn.execute('SELECT * FROM posts WHERE id = ?', (int(post_id),)).fetchone()
