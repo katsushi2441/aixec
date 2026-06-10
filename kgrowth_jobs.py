@@ -153,6 +153,70 @@ def _slugify(value: str) -> str:
     return slug[:80] or "topic"
 
 
+def _file_contains(relative_path: str, patterns: list[str]) -> dict[str, bool]:
+    text = _read(relative_path)
+    return {pattern: pattern in text for pattern in patterns}
+
+
+def _amazon_cta_rebalance_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    checks = {
+        "go_php_has_amazon": all(_file_contains("webapps/go.php", ["function amazon_url", "tag=bittensorman-22"]).values()),
+        "books_amazon_first": _contains_in_order(_read("webapps/books_ranking.php"), "Amazonで見る", "楽天ブックスで見る"),
+        "sns_related_amazon_first": _contains_in_order(_read("webapps/sns.php"), "Amazonで探す", "楽天でも見る"),
+        "aixtube_amazon_first": _contains_in_order(_read("webapps/aixtube.php"), "Amazonで探す", "楽天市場でも見る"),
+    }
+    ok = all(checks.values())
+    artifact = _write_artifact(
+        "amazon_cta_rebalance",
+        str(improvement_job.get("id") or "latest"),
+        "json",
+        json.dumps({"checks": checks, "checked_at": _now()}, ensure_ascii=False, indent=2),
+    )
+    return _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note="Amazon優先CTA共通テンプレート確認" + ("完了" if ok else "失敗"),
+        metrics=checks,
+        artifacts=[artifact],
+        error="" if ok else "Amazon-first CTA template checks failed",
+    )
+
+
+def _amazon_product_growth_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = dict(improvement_job.get("payload") or {})
+    product_id = str(payload.get("product_id") or payload.get("id") or "").strip()
+    query = str(payload.get("name") or payload.get("query") or payload.get("keyword") or "").strip()
+    product = _api_get(f"products/{product_id}") if product_id else (_api_get("products", {"q": query, "limit": 1}) if query else {})
+    item = product.get("item") if isinstance(product.get("item"), dict) else None
+    if item is None and isinstance(product.get("items"), list) and product["items"]:
+        item = product["items"][0]
+    name = str((item or {}).get("name") or query or product_id)
+    target_id = str((item or {}).get("id") or product_id)
+    amazon_url = SITE_BASE + "/go.php?" + urllib.parse.urlencode({"to": "amazon", "kw": name, "from": "kgrowth-product", "pid": target_id})
+    checks = {
+        "has_product_or_query": bool(name),
+        "go_php_has_amazon": "function amazon_url" in _read("webapps/go.php"),
+        "amazon_url_created": "to=amazon" in amazon_url,
+    }
+    artifact = _write_artifact(
+        "amazon_product_growth",
+        str(improvement_job.get("id") or target_id or "latest"),
+        "json",
+        json.dumps({"product": item or {}, "amazon_url": amazon_url, "checks": checks, "checked_at": _now()}, ensure_ascii=False, indent=2),
+    )
+    ok = all(checks.values())
+    return _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note=f"{name}: Amazon導線生成確認" + ("完了" if ok else "失敗"),
+        metrics=checks,
+        artifacts=[artifact],
+        error="" if ok else "Amazon product growth checks failed",
+    )
+
+
 def _amazon_hub_article_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
     payload = dict(improvement_job.get("payload") or {})
     topic = str(payload.get("topic") or "").strip()
@@ -194,6 +258,66 @@ def _amazon_hub_article_job(improvement_job: dict[str, Any], dry_run: bool) -> d
         metrics={"topic": topic, "slug": slug, "related_products": len(items)},
         artifacts=[artifact],
         error="" if ok else "topic is empty",
+    )
+
+
+def _aixtube_amazon_cta_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    text = _read("webapps/aixtube.php")
+    body = text.split("<body>", 1)[-1]
+    checks = {
+        "has_amazon_click_url": "function amazon_click_url" in text,
+        "has_rakuten_click_url": "function rakuten_click_url" in text,
+        "top_nav_amazon_before_rakuten": _contains_in_order(body, "nav-amazon", "nav-rakuten"),
+        "body_cta_amazon_before_rakuten": _contains_in_order(body, "Amazonで探す", "楽天市場でも見る"),
+        "description_meta_exists": 'name="description"' in text,
+    }
+    artifact = _write_artifact(
+        "aixtube_amazon_cta",
+        str(improvement_job.get("id") or "latest"),
+        "json",
+        json.dumps({"checks": checks, "checked_at": _now()}, ensure_ascii=False, indent=2),
+    )
+    ok = all(checks.values())
+    return _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note="AIxTube Amazon優先CTA確認" + ("完了" if ok else "失敗"),
+        metrics=checks,
+        artifacts=[artifact],
+        error="" if ok else "AIxTube Amazon CTA checks failed",
+    )
+
+
+def _aixtube_search_snippet_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = dict(improvement_job.get("payload") or {})
+    query = str(payload.get("query") or "").strip()
+    page = str(payload.get("page") or "").strip()
+    status_code, html = _http_get(page) if page else (0, "")
+    lower = html.lower()
+    checks = {
+        "status_code": status_code,
+        "has_title": "<title>" in lower,
+        "has_description": 'name="description"' in lower,
+        "has_og_description": 'property="og:description"' in lower,
+        "has_amazon": "to=amazon" in lower or "amazon" in lower,
+        "query_seen": bool(query and query.lower() in lower),
+    }
+    artifact = _write_artifact(
+        "aixtube_search_snippet",
+        str(improvement_job.get("id") or "latest"),
+        "json",
+        json.dumps({"query": query, "page": page, "checks": checks, "checked_at": _now()}, ensure_ascii=False, indent=2),
+    )
+    ok = status_code == 200 and checks["has_title"] and checks["has_description"] and checks["has_og_description"] and checks["has_amazon"]
+    return _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note=f"{query or page}: AIxTube検索スニペット確認" + ("完了" if ok else "失敗"),
+        metrics=checks,
+        artifacts=[artifact],
+        error="" if ok else "AIxTube page snippet check failed",
     )
 
 
@@ -248,19 +372,6 @@ def _aixsns_register_noindex_job(improvement_job: dict[str, Any], dry_run: bool)
     )
 
 
-def _unsupported_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
-    kind = str(improvement_job.get("kind") or "unknown")
-    title = str(improvement_job.get("title") or kind)
-    return _result(
-        ok=True,
-        status="warn",
-        items=1,
-        note=f"{title}: kind={kind} は汎用実行記録として処理しました",
-        metrics={"generic_execution_record": 1},
-        artifacts=[_write_artifact(kind, str(improvement_job.get("id") or ""), "json", json.dumps(improvement_job, ensure_ascii=False, indent=2))],
-    )
-
-
 def execute_improvement_job(
     dry_run: bool = False,
     improvement_job: dict[str, Any] | None = None,
@@ -277,12 +388,28 @@ def execute_improvement_job(
     if not kind:
         return _result(ok=False, status="failed", items=0, note="improvement_job.kind is required", error="missing kind")
 
-    if kind == "amazon_hub_article":
+    if kind == "amazon_cta_rebalance":
+        result = _amazon_cta_rebalance_job(job, dry_run)
+    elif kind == "amazon_product_growth":
+        result = _amazon_product_growth_job(job, dry_run)
+    elif kind == "amazon_hub_article":
         result = _amazon_hub_article_job(job, dry_run)
+    elif kind == "aixtube_amazon_cta":
+        result = _aixtube_amazon_cta_job(job, dry_run)
+    elif kind == "aixtube_search_snippet":
+        result = _aixtube_search_snippet_job(job, dry_run)
     elif kind == "buzblogger_search_intent":
         result = _buzblogger_search_intent_job(job, dry_run)
     elif kind == "aixsns_register_noindex":
         result = _aixsns_register_noindex_job(job, dry_run)
     else:
-        result = _unsupported_job(job, dry_run)
+        return _result(
+            ok=False,
+            status="failed",
+            items=0,
+            note=f"unsupported kgrowth improvement kind: {kind}",
+            metrics={"kind": kind},
+            artifacts=[],
+            error=f"kgrowth job kind is not implemented: {kind}",
+        )
     return _post_aixsns_if_needed(job, result, dry_run)
