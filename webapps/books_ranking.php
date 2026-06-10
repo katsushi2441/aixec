@@ -123,6 +123,22 @@ function rakuten_click_url($item) {
     return '/go.php?' . http_build_query($params);
 }
 
+function amazon_click_url($item) {
+    $keyword = isset($item['name']) ? $item['name'] : '';
+    if ($keyword === '' && isset($item['title'])) $keyword = $item['title'];
+    if ($keyword === '') $keyword = '本';
+    $params = array(
+        'to' => 'amazon',
+        'kw' => $keyword,
+        'from' => 'books_ranking:' . (isset($_GET['tab']) ? $_GET['tab'] : ''),
+    );
+    if (!empty($item['id'])) $params['pid'] = $item['id'];
+    if (!empty($item['model_number'])) $params['model'] = $item['model_number'];
+    if (!empty($item['jan'])) $params['jan'] = preg_replace('/\D/', '', $item['jan']);
+    if (!empty($item['isbn'])) $params['jan'] = preg_replace('/\D/', '', $item['isbn']);
+    return '/go.php?' . http_build_query($params);
+}
+
 // ── タブ定義 ──────────────────────────────────────────────────────────────
 $tabs = array(
     'startup'     => array('label' => '起業・開業',        'type' => 'rakuten', 'params' => array('genre_id' => '001006018003', 'hits' => 20)),
@@ -259,6 +275,10 @@ a{color:inherit}
 .title:hover{text-decoration:underline}
 .meta{color:var(--muted);font-size:12px;margin-top:10px}
 .price{font-size:17px;font-weight:700;margin-top:auto;padding-top:12px;color:var(--red)}
+.actions{display:grid;grid-template-columns:1fr;gap:7px;margin-top:10px}
+.btn{display:flex;align-items:center;justify-content:center;min-height:34px;padding:6px 9px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);font-size:13px;font-weight:700;text-align:center;text-decoration:none}
+.btn.primary{background:#f59b23;border-color:#f59b23;color:#241000}
+.btn.rakuten{background:#bf0000;border-color:#bf0000;color:#fff}
 .empty{background:#fff;border:1px solid var(--line);border-radius:4px;padding:34px;text-align:center;color:var(--muted)}
 @media(max-width:960px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){.bar{align-items:flex-start;flex-direction:column;gap:8px}.brand{align-self:flex-start}.nav{display:none}.nav-mobile{display:flex;gap:8px;margin-top:8px;overflow-x:auto;width:100%;-webkit-overflow-scrolling:touch;scrollbar-width:none}.nav-mobile::-webkit-scrollbar{display:none}.nav-mobile .nav-books-btn,.nav-mobile .nav-reels-btn,.nav-mobile .nav-aixtube-btn,.nav-mobile .nav-sns-btn{display:block}.hero h1{font-size:22px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.brand span{white-space:normal}.brand-ogp{height:34px}.tab-list a{padding:9px 13px;font-size:13px;white-space:nowrap}.tab-badge{display:none}.grid{gap:6px}.card{min-height:auto;border-radius:2px}.card:hover{box-shadow:none}.cover{height:auto;padding:6px}.body{padding:10px}.price{font-size:14px}.tab-list{gap:4px}}
@@ -308,7 +328,7 @@ a{color:inherit}
     <div class="empty">まだ書籍のクリック履歴がありません。</div>
   <?php else: ?>
   <div class="grid">
-    <?php foreach ($click_ranking as $idx => $item): $url = rakuten_click_url($item); ?>
+    <?php foreach ($click_ranking as $idx => $item): $url = rakuten_click_url($item); $amazon_url = amazon_click_url($item); ?>
     <article class="card">
       <div class="rank">#<?php echo $idx + 1; ?><small><?php echo (int)$item['_clicks']; ?> clicks</small></div>
       <a class="cover" href="<?php echo h($url); ?>" target="_blank" rel="nofollow sponsored noopener">
@@ -318,6 +338,10 @@ a{color:inherit}
         <a class="title" href="<?php echo h($url); ?>" target="_blank" rel="nofollow sponsored noopener"><?php echo h($item['name']); ?></a>
         <div class="meta"><?php echo h($item['maker']); ?><br><?php echo h($item['model_number']); ?></div>
         <div class="price"><?php echo h(yen($item['sale_price'])); ?></div>
+        <div class="actions">
+          <a class="btn primary" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener">Amazonで見る</a>
+          <a class="btn rakuten" href="<?php echo h($url); ?>" target="_blank" rel="nofollow sponsored noopener">楽天ブックスで見る</a>
+        </div>
       </div>
     </article>
     <?php endforeach; ?>
@@ -342,6 +366,7 @@ a{color:inherit}
         $book_dest = text_value(!empty($book['affiliate_url']) ? $book['affiliate_url'] : (isset($book['item_url']) ? $book['item_url'] : ''));
         $book_isbn = preg_replace('/\D/', '', text_value(isset($book['isbn']) ? $book['isbn'] : ''));
         $book_url = '/go.php?to=rakuten&from=' . urlencode('books_ranking:' . $active) . '&kw=' . urlencode($book_title) . '&jan=' . urlencode($book_isbn) . '&url=' . urlencode($book_dest);
+        $amazon_url = amazon_click_url(array('title' => $book_title, 'isbn' => $book_isbn));
     ?>
     <article class="card">
       <div class="rank">#<?php echo $idx + 1; ?><small><?php echo h($book_review !== '' ? '★'.$book_review : ''); ?></small></div>
@@ -352,6 +377,10 @@ a{color:inherit}
         <a class="title" href="<?php echo h($book_url); ?>" target="_blank" rel="nofollow sponsored noopener"><?php echo h($book_title); ?></a>
         <div class="meta"><?php echo h($book_author); ?><?php if ($book_publisher !== ''): ?><br><?php echo h($book_publisher); ?><?php endif; ?></div>
         <div class="price"><?php echo h(yen($book['item_price'])); ?></div>
+        <div class="actions">
+          <a class="btn primary" href="<?php echo h($amazon_url); ?>" target="_blank" rel="nofollow sponsored noopener">Amazonで見る</a>
+          <a class="btn rakuten" href="<?php echo h($book_url); ?>" target="_blank" rel="nofollow sponsored noopener">楽天ブックスで見る</a>
+        </div>
       </div>
     </article>
     <?php endforeach; ?>
