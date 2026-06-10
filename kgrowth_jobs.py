@@ -13,6 +13,7 @@ from typing import Any
 PROJECT_DIR = Path("/home/kojima/work/aixec")
 ARTIFACT_DIR = PROJECT_DIR / "storage" / "kgrowth"
 SITE_BASE = "https://aixec.exbridge.jp"
+SNS_POST_URL = SITE_BASE + "/api.php?path=posts"
 
 
 def _now() -> str:
@@ -29,7 +30,7 @@ def _result(
     artifacts: list[dict[str, Any]] | None = None,
     error: str = "",
 ) -> dict[str, Any]:
-    return {
+    result = {
         "ok": ok,
         "status": status,
         "items": int(items or 0),
@@ -39,6 +40,67 @@ def _result(
         "error": error,
         "created_at": _now(),
     }
+    return result
+
+
+def _http_post_json(url: str, payload: dict[str, Any], timeout: int = 20) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "kgrowth-jobs/1.0"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            text = res.read().decode("utf-8", errors="replace")
+            status = int(getattr(res, "status", 200))
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        status = int(exc.code)
+    try:
+        data = json.loads(text) if text else {}
+    except json.JSONDecodeError:
+        data = {"raw": text[:1000]}
+    if isinstance(data, dict):
+        data.setdefault("status_code", status)
+        return data
+    return {"ok": status < 400, "status_code": status, "data": data}
+
+
+def _post_aixsns_if_needed(improvement_job: dict[str, Any], result: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    if dry_run or not result.get("ok") or int(result.get("items") or 0) < 1:
+        return result
+    job_id = str(improvement_job.get("id") or "").strip()
+    marker = f"kgrowth:{job_id}" if job_id else ""
+    title = str(improvement_job.get("title") or improvement_job.get("kind") or "kgrowth改善ジョブ")
+    kind = str(improvement_job.get("kind") or "")
+    note = str(result.get("note") or "")
+    artifact_lines = []
+    for artifact in (result.get("artifacts") or [])[:2]:
+        path = artifact.get("path") if isinstance(artifact, dict) else ""
+        if path:
+            artifact_lines.append(f"成果物: {path}")
+    content = "\n".join(
+        line
+        for line in [
+            f"kgrowth改善ジョブ完了: {title}",
+            f"kind: {kind}",
+            note,
+            *artifact_lines,
+            "GSCとsimpletrackの分析から作った改善ジョブを実行しました。",
+            marker,
+        ]
+        if line
+    )
+    post = _http_post_json(SNS_POST_URL, {"author": "kgrowth", "content": content})
+    result = dict(result)
+    result["sns_post"] = {
+        "ok": bool(post.get("ok")),
+        "id": (post.get("item") or {}).get("id") if isinstance(post.get("item"), dict) else None,
+        "status_code": post.get("status_code"),
+    }
+    return result
 
 
 def _read(relative_path: str) -> str:
@@ -345,16 +407,17 @@ def execute_improvement_job(
         return _result(ok=False, status="failed", items=0, note="improvement_job.kind is required", error="missing kind")
 
     if kind in {"amazon_cta_rebalance", "aixtube_amazon_cta"}:
-        return _amazon_cta_rebalance_job(job, dry_run)
-    if kind == "amazon_product_growth":
-        return _amazon_product_growth_job(job, dry_run)
-    if kind == "amazon_hub_article":
-        return _amazon_hub_article_job(job, dry_run)
-    if kind == "aixtube_search_snippet":
-        return _aixtube_search_snippet_job(job, dry_run)
-    if kind == "buzblogger_search_intent":
-        return _buzblogger_search_intent_job(job, dry_run)
-    if kind == "aixsns_register_noindex":
-        return _aixsns_register_noindex_job(job, dry_run)
-
-    return _unsupported_job(job, dry_run)
+        result = _amazon_cta_rebalance_job(job, dry_run)
+    elif kind == "amazon_product_growth":
+        result = _amazon_product_growth_job(job, dry_run)
+    elif kind == "amazon_hub_article":
+        result = _amazon_hub_article_job(job, dry_run)
+    elif kind == "aixtube_search_snippet":
+        result = _aixtube_search_snippet_job(job, dry_run)
+    elif kind == "buzblogger_search_intent":
+        result = _buzblogger_search_intent_job(job, dry_run)
+    elif kind == "aixsns_register_noindex":
+        result = _aixsns_register_noindex_job(job, dry_run)
+    else:
+        result = _unsupported_job(job, dry_run)
+    return _post_aixsns_if_needed(job, result, dry_run)
