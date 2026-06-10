@@ -467,6 +467,9 @@ if ($detail_post) {
 <title><?php echo h($page_title); ?></title>
 <meta name="description" content="<?php echo h($page_desc); ?>">
 <link rel="canonical" href="<?php echo h($page_url); ?>">
+<?php if ($detail_post && (($detail_post['author'] ?? '') === 'register')): ?>
+<meta name="robots" content="noindex,follow">
+<?php endif; ?>
 <meta name="keywords" content="AIxSNSニュース,SNSニュース,AIニュース,AI最新情報,Web3,テクノロジー,SNSトレンド,AIxEC,ビジネスAI,AI活用">
 <link rel="alternate" type="application/rss+xml" title="AIxSNSニュース RSS" href="<?php echo h($BASE_HOST . '/sns.php?feed'); ?>">
 <meta property="og:type"        content="<?php echo $detail_post ? 'article' : 'website'; ?>">
