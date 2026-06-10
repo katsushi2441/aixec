@@ -459,7 +459,7 @@ $post_id     = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $post_slug   = isset($_GET['slug']) ? trim((string)$_GET['slug']) : '';
 $detail_post = null;
 if ($post_slug !== '') {
-    $res = api_call('/posts/slug/' . rawurlencode($post_slug));
+    $res = api_call('/posts/slug/' . $post_slug);
     $detail_post = (!empty($res['ok']) && !empty($res['item'])) ? $res['item'] : null;
     if ($detail_post && !empty($detail_post['id'])) $post_id = (int)$detail_post['id'];
 } elseif ($post_id > 0) {
