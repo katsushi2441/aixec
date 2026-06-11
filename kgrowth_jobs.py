@@ -14,6 +14,7 @@ PROJECT_DIR = Path("/home/kojima/work/aixec")
 ARTIFACT_DIR = PROJECT_DIR / "storage" / "kgrowth"
 SITE_BASE = "https://aixec.exbridge.jp"
 SNS_POST_URL = SITE_BASE + "/api.php?path=posts"
+KURAGE_BASE = "https://kurage.exbridge.jp"
 
 
 def _now() -> str:
@@ -533,6 +534,125 @@ def _aixsns_register_noindex_job(improvement_job: dict[str, Any], dry_run: bool)
     )
 
 
+def _kurage_page_url(path: str) -> str:
+    path = str(path or "").strip()
+    if path.startswith("https://"):
+        return path
+    if not path.startswith("/"):
+        path = "/" + path
+    return KURAGE_BASE + path
+
+
+def _http_get_text(url: str, timeout: int = 20) -> tuple[int, str]:
+    req = urllib.request.Request(url, headers={"User-Agent": "kgrowth-kurage/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            return int(getattr(res, "status", 200)), res.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        return 0, str(exc)
+
+
+def _kurage_video_detail_seo_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = improvement_job.get("payload") if isinstance(improvement_job.get("payload"), dict) else {}
+    page = str(payload.get("page") or "")
+    url = _kurage_page_url(page)
+    status, html = _http_get_text(url)
+    checks = {
+        "http_ok": 200 <= status < 300,
+        "has_title": "<title>" in html.lower(),
+        "has_description": 'name="description"' in html.lower(),
+        "has_canonical": 'rel="canonical"' in html.lower(),
+        "has_video_object": "VideoObject" in html,
+        "has_thumbnail": "proxy=thumbnail" in html,
+        "has_video_player": "proxy=video" in html,
+    }
+    artifact = _write_artifact(
+        "kurage_video_detail_seo",
+        str(improvement_job.get("id") or ""),
+        "json",
+        json.dumps({"url": url, "checks": checks, "dry_run": dry_run}, ensure_ascii=False, indent=2),
+    )
+    ok = checks["http_ok"] and checks["has_title"] and checks["has_description"] and checks["has_canonical"]
+    return _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note="Kurage動画詳細SEO確認" + ("完了" if ok else "失敗"),
+        metrics=checks,
+        artifacts=[artifact],
+        error="" if ok else "Kurage video detail page SEO metadata is incomplete",
+    )
+
+
+def _kurage_amazon_cta_from_clicks_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = improvement_job.get("payload") if isinstance(improvement_job.get("payload"), dict) else {}
+    keyword = str(payload.get("keyword") or "AI動画生成").strip()
+    asin = str(payload.get("asin") or "").strip()
+    source_page = str(payload.get("source_page") or "/kuragev.php").strip()
+    cta_url = "/go.php?to=amazon&kw=" + urllib.parse.quote(keyword)
+    if asin:
+        cta_url += "&asin=" + urllib.parse.quote(asin)
+    cta_url += "&from=" + urllib.parse.quote(source_page)
+    artifact_payload = {
+        "source_page": source_page,
+        "keyword": keyword,
+        "asin": asin,
+        "cta_url": cta_url,
+        "html": f'<a href="{cta_url}" rel="nofollow sponsored">Amazonで関連商品を見る</a>',
+        "dry_run": dry_run,
+    }
+    artifact = _write_artifact(
+        "kurage_amazon_cta_from_clicks",
+        str(improvement_job.get("id") or ""),
+        "json",
+        json.dumps(artifact_payload, ensure_ascii=False, indent=2),
+    )
+    status, _ = _http_get_text(KURAGE_BASE + "/go.php?to=amazon&kw=" + urllib.parse.quote(keyword) + "&from=" + urllib.parse.quote(source_page), timeout=10)
+    ok = status in {204, 302} or 300 <= status < 400
+    return _result(
+        ok=ok,
+        status="ok" if ok else "failed",
+        items=1 if ok else 0,
+        note="Kurage Amazon CTA案生成" + ("完了" if ok else "失敗"),
+        metrics={"go_php_status": status, "has_keyword": bool(keyword), "has_source_page": bool(source_page)},
+        artifacts=[artifact],
+        error="" if ok else "Kurage go.php did not respond as expected",
+    )
+
+
+def _kurage_search_intent_video_page_job(improvement_job: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    payload = improvement_job.get("payload") if isinstance(improvement_job.get("payload"), dict) else {}
+    query = str(payload.get("query") or "").strip()
+    page = str(payload.get("page") or "").strip()
+    artifact_payload = {
+        "query": query,
+        "page": page,
+        "recommended_changes": [
+            "Align title and meta description with the search query.",
+            "Add related Kurage/Horizon video links for the same intent.",
+            "Add an Amazon CTA through /go.php only when the query has buying or learning-resource intent.",
+        ],
+        "dry_run": dry_run,
+    }
+    artifact = _write_artifact(
+        "kurage_search_intent_video_page",
+        str(improvement_job.get("id") or ""),
+        "json",
+        json.dumps(artifact_payload, ensure_ascii=False, indent=2),
+    )
+    return _result(
+        ok=bool(query and page),
+        status="ok" if query and page else "failed",
+        items=1 if query and page else 0,
+        note="Kurage検索意図動画ページ改善案生成" + ("完了" if query and page else "失敗"),
+        metrics={"has_query": bool(query), "has_page": bool(page)},
+        artifacts=[artifact],
+        error="" if query and page else "query/page is missing",
+    )
+
+
 def execute_improvement_job(
     dry_run: bool = False,
     improvement_job: dict[str, Any] | None = None,
@@ -567,6 +687,12 @@ def execute_improvement_job(
         result = _buzblogger_search_intent_job(job, dry_run)
     elif kind == "aixsns_register_noindex":
         result = _aixsns_register_noindex_job(job, dry_run)
+    elif kind == "kurage_video_detail_seo":
+        result = _kurage_video_detail_seo_job(job, dry_run)
+    elif kind == "kurage_amazon_cta_from_clicks":
+        result = _kurage_amazon_cta_from_clicks_job(job, dry_run)
+    elif kind == "kurage_search_intent_video_page":
+        result = _kurage_search_intent_video_page_job(job, dry_run)
     else:
         return _result(
             ok=False,
@@ -577,4 +703,6 @@ def execute_improvement_job(
             artifacts=[],
             error=f"kgrowth job kind is not implemented: {kind}",
         )
+    if str(job.get("target_app") or "") == "kurage":
+        return result
     return _post_aixsns_if_needed(job, result, dry_run)
