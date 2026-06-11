@@ -609,16 +609,24 @@ def _kurage_amazon_cta_from_clicks_job(improvement_job: dict[str, Any], dry_run:
         "json",
         json.dumps(artifact_payload, ensure_ascii=False, indent=2),
     )
-    status, _ = _http_get_text(KURAGE_BASE + "/go.php?to=amazon&kw=" + urllib.parse.quote(keyword) + "&from=" + urllib.parse.quote(source_page), timeout=10)
-    ok = status in {204, 302} or 300 <= status < 400
+    parsed_cta = urllib.parse.urlparse(cta_url)
+    cta_params = urllib.parse.parse_qs(parsed_cta.query)
+    checks = {
+        "cta_path_is_go_php": parsed_cta.path == "/go.php",
+        "cta_target_is_amazon": (cta_params.get("to") or [""])[0] == "amazon",
+        "has_keyword": bool(keyword),
+        "has_source_page": bool(source_page),
+        "has_sponsored_rel": 'rel="nofollow sponsored"' in artifact_payload["html"],
+    }
+    ok = all(checks.values())
     return _result(
         ok=ok,
         status="ok" if ok else "failed",
         items=1 if ok else 0,
         note="Kurage Amazon CTA案生成" + ("完了" if ok else "失敗"),
-        metrics={"go_php_status": status, "has_keyword": bool(keyword), "has_source_page": bool(source_page)},
+        metrics=checks,
         artifacts=[artifact],
-        error="" if ok else "Kurage go.php did not respond as expected",
+        error="" if ok else "Kurage Amazon CTA format is incomplete",
     )
 
 
