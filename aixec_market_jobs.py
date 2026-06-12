@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_PROJECT_DIR = "/home/kojima/work/aixec"
 DEFAULT_AIXEC_API = "https://aixec.exbridge.jp/api.php"
-DEFAULT_MARKET_REGISTER_TASK_API = "https://aixec.exbridge.jp/api.php?path=market/register-task"
+DEFAULT_MARKET_REGISTER_TASK_API = "http://127.0.0.1:8081/market/register-task"
 DEFAULT_MARKET_TIMEOUT = 3600
 DEFAULT_GROWTH_TIMEOUT = 1800
 DEFAULT_REGISTER_TIMEOUT = 1800
@@ -177,6 +177,9 @@ def _load_task(kwargs: dict[str, Any], dry_run: bool) -> dict[str, Any]:
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 60) -> dict[str, Any]:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request_headers = {"Content-Type": "application/json", "User-Agent": "rqdb4ai-aixec/0.1"}
+    api_token = os.environ.get("AIXEC_MARKET_REGISTER_TOKEN") or os.environ.get("AIXEC_API_TOKEN")
+    if api_token:
+        request_headers["Authorization"] = "Bearer " + api_token
     if headers:
         request_headers.update(headers)
     req = Request(url, data=data, headers=request_headers, method="POST")
