@@ -70,10 +70,11 @@ if(isset($_GET["dashboard"])){
     $ref_count = array();
     $go_product_count = array();
     $go_from_count = array();
-    $lines = file($logfile);
-
-
-    foreach($lines as $line){
+    /* file() はログ全体を配列化しメモリを食い潰す(70MB超でmemory_limit 128MB到達)。
+       fgets のストリーム読みで一定メモリに抑える */
+    $fh = fopen($logfile, "r");
+    if(!$fh){ die("log open failed"); }
+    while(($line = fgets($fh)) !== false){
 
         $parts = explode(" | ", trim($line));
         if(count($parts) < 5) continue;
@@ -170,6 +171,7 @@ if(isset($_GET["dashboard"])){
             $ref_count[$ref]++;
         }
     }
+    fclose($fh);
 
     ksort($pv_per_day);
     arsort($url_count);
