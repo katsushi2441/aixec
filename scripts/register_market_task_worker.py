@@ -125,6 +125,9 @@ def ollama_generate(prompt, model="gemma4:e4b", timeout=180):
         "model": model,
         "prompt": prompt,
         "stream": False,
+        # gemma4系は思考型モデル。think未指定だと隠れ推論がnum_predictを
+        # 食い潰し、JSON応答が尻切れ/空になる(Ollama再起動でも直らない)。
+        "think": False,
         "options": {
             "temperature": 0.1,
             "num_predict": 1024,

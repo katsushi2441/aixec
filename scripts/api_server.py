@@ -1300,7 +1300,10 @@ class Handler(BaseHTTPRequestHandler):
                 pid = product['id']
                 def generate():
                     try:
+                        # gemma4系は思考型: think未指定だと隠れ推論がnum_predictを
+                        # 食い潰し応答が空/尻切れになる(再起動でも直らない既知の罠)。
                         payload = json.dumps({'model': ollama_model, 'prompt': prompt, 'stream': False,
+                                              'think': False,
                                               'options': {'temperature': 0.7, 'num_predict': 5000}}).encode('utf-8')
                         req = Request(ollama_url, data=payload, headers={'Content-Type': 'application/json'})
                         with urlopen(req, timeout=180) as res:
