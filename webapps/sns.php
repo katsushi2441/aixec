@@ -149,12 +149,15 @@ function absolute_url_for_ogp($url, $base) {
 function fetch_ogp_card($url) {
     $url = trim((string)$url);
     if (!preg_match('#^https?://#i', $url)) return array('ok' => false, 'error' => 'invalid url');
+    $requested_host = strtolower((string)parse_url($url, PHP_URL_HOST));
+    $is_amazon = (bool)preg_match('/(^|\.)amazon\.(co\.jp|com)$/i', $requested_host);
     $cache_dir = __DIR__ . '/data/ogp_cache';
     if (!is_dir($cache_dir)) @mkdir($cache_dir, 0755, true);
     $cache_file = $cache_dir . '/' . sha1($url) . '.json';
     if (is_readable($cache_file) && filemtime($cache_file) > time() - 86400) {
         $cached = json_decode(file_get_contents($cache_file), true);
-        if (is_array($cached)) return $cached;
+        // Amazonはog:imageを返さない場合がある。画像なしの旧キャッシュは再取得する。
+        if (is_array($cached) && (!$is_amazon || !empty($cached['image']))) return $cached;
     }
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -189,6 +192,10 @@ function fetch_ogp_card($url) {
     $desc = isset($meta['og:description']) ? $meta['og:description'] : (isset($meta['description']) ? $meta['description'] : '');
     $image = isset($meta['og:image']) ? absolute_url_for_ogp($meta['og:image'], $final_url ?: $url) : '';
     $host = parse_url($final_url ?: $url, PHP_URL_HOST);
+    if ($image === '' && $is_amazon
+        && preg_match('/\bdata-old-hires=["\'](https:\/\/m\.media-amazon\.com\/images\/I\/[^"\']+)["\']/i', $html, $im)) {
+        $image = html_entity_decode($im[1], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
     $card = array(
         'ok' => true,
         'url' => $final_url ?: $url,
@@ -201,6 +208,22 @@ function fetch_ogp_card($url) {
         @file_put_contents($cache_file, json_encode($card, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
     }
     return $card;
+}
+
+function render_ogp_card_html($card) {
+    if (!is_array($card) || empty($card['ok']) || (empty($card['title']) && empty($card['image']))) return '';
+    $has_image = !empty($card['image']);
+    $class = $has_image ? 'ogp-card' : 'ogp-card no-image';
+    $html = '<a class="' . $class . '" href="' . h($card['url'] ?? '') . '" target="_blank" rel="noopener nofollow">';
+    if ($has_image) {
+        $html .= '<img class="ogp-image" src="' . h($card['image']) . '" alt="' . h($card['title'] ?? '') . '" loading="lazy">';
+    }
+    $html .= '<div class="ogp-body">';
+    $html .= '<div class="ogp-host">' . h($card['host'] ?? '') . '</div>';
+    $html .= '<div class="ogp-title">' . h($card['title'] ?? ($card['url'] ?? '')) . '</div>';
+    if (!empty($card['description'])) $html .= '<div class="ogp-desc">' . h($card['description']) . '</div>';
+    $html .= '</div></a>';
+    return $html;
 }
 
 function product_page_url($item) {
@@ -760,6 +783,11 @@ a.badge:hover{background:var(--accent-dark)}
         <span><?php echo (int)($detail_post['views'] ?? 0); ?> views</span>
       </div>
       <div class="server-body"><?php echo render_post_text_html($detail_post['content']); ?></div>
+      <?php
+        $detail_ogp_url = first_url_from_text($detail_post['content'] ?? '');
+        $detail_ogp = $detail_ogp_url !== '' ? fetch_ogp_card($detail_ogp_url) : array();
+        echo render_ogp_card_html($detail_ogp);
+      ?>
       <?php
         $aff_kw = mb_substr(preg_replace('/https?:\/\/\S+|\s+/u', ' ', strip_tags($detail_post['content'] ?? '')), 0, 30);
         $aff_kw = trim($aff_kw) ?: 'AI';
