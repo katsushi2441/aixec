@@ -134,6 +134,17 @@ function first_url_from_text($text) {
     }
     return '';
 }
+function preferred_ogp_url_from_text($text) {
+    if (!preg_match_all('#https?://[^\s<>"\']+#u', (string)$text, $matches)) return '';
+    $urls = array_map(function($url) {
+        return rtrim($url, "。、，．,.)]}\n\r\t");
+    }, $matches[0]);
+    foreach ($urls as $url) {
+        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+        if (preg_match('/(^|\.)amazon\.(co\.jp|com)$/i', $host)) return $url;
+    }
+    return $urls[0] ?? '';
+}
 function absolute_url_for_ogp($url, $base) {
     $url = html_entity_decode(trim((string)$url), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     if ($url === '') return '';
@@ -784,7 +795,7 @@ a.badge:hover{background:var(--accent-dark)}
       </div>
       <div class="server-body"><?php echo render_post_text_html($detail_post['content']); ?></div>
       <?php
-        $detail_ogp_url = first_url_from_text($detail_post['content'] ?? '');
+        $detail_ogp_url = preferred_ogp_url_from_text($detail_post['content'] ?? '');
         $detail_ogp = $detail_ogp_url !== '' ? fetch_ogp_card($detail_ogp_url) : array();
         echo render_ogp_card_html($detail_ogp);
       ?>
@@ -888,6 +899,17 @@ function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
 function firstUrl(text) {
     var m = String(text || '').match(/https?:\/\/[^\s<>"']+/);
     return m ? m[0].replace(/[。、，．,.)\]}]+$/g, '') : '';
+}
+
+function preferredOgpUrl(text) {
+    var urls = String(text || '').match(/https?:\/\/[^\s<>"']+/g) || [];
+    urls = urls.map(function(url){ return url.replace(/[。、，．,.)\]}]+$/g, ''); });
+    for (var i = 0; i < urls.length; i++) {
+        try {
+            if (/(^|\.)amazon\.(co\.jp|com)$/i.test(new URL(urls[i]).hostname)) return urls[i];
+        } catch (e) {}
+    }
+    return urls.length ? urls[0] : '';
 }
 
 function linkifyText(text) {
@@ -1101,7 +1123,7 @@ function buildCard(p) {
             +'<span class="post-time"><a href="'+esc(path)+'">'+esc(timeAgo(p.created_at))+'</a></span>'
           +'</div>'
           +'<div class="post-body">'+renderContent(p.content)+'</div>'
-          +'<div class="ogp-slot" data-ogp-url="'+esc(firstUrl(p.content))+'"></div>'
+          +'<div class="ogp-slot" data-ogp-url="'+esc(preferredOgpUrl(p.content))+'"></div>'
           +'<div class="post-actions">'
             +'<span class="impression" title="表示回数">👁 <span data-views-for="'+p.id+'">'+esc(p.views || 0)+'</span></span>'
             +'<button class="act-btn copy-btn" data-content="'+esc(shareText)+'" data-url="'+esc(postUrl)+'">📋 コピー</button>'
