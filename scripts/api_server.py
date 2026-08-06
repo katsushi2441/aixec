@@ -1295,7 +1295,10 @@ class Handler(BaseHTTPRequestHandler):
                     os.environ.get('OLLAMA_BASE_URL', 'http://192.168.0.3:11434'),
                 ).rstrip('/')
                 ollama_url = ollama_endpoint + '/api/generate'
-                ollama_model = os.environ.get('OLLAMA_MODEL', 'gemma4:26b')
+                # 既定は常用の12b。以前は26b(18GB)が既定で、.envを読み損ねた起動だと
+                # 18GBのモデルロードが走る。0.3も0.14もスワップ無しのため、そのまま
+                # メモリ枯渇→スラッシングに直結する(2026-08-07に0.14で実際に発生)。
+                ollama_model = os.environ.get('OLLAMA_MODEL', 'gemma4:12b-it-qat')
                 # バックグラウンドスレッドで生成
                 pid = product['id']
                 def generate():
