@@ -39,7 +39,7 @@ th{width:34%;background:#fafafa;font-weight:600;white-space:nowrap}
     <table>
       <tr><th>販売業者</th><td>株式会社エクスブリッジ</td></tr>
       <tr><th>運営責任者</th><td>小嶋 篤</td></tr>
-      <tr><th>所在地</th><td>〒467-0853　愛知県名古屋市瑞穂区内浜町34-9 宝第二スカイハイツ305</td></tr>
+      <tr><th>所在地</th><td>〒467-0853　愛知県名古屋市瑞穂区内浜町34-9 305</td></tr>
       <tr><th>電話番号</th><td>050-5436-6141<br><small style="color:var(--muted);">電話でのお問い合わせはお受けしておりません。メールまたはお問い合わせフォームをご利用ください。</small></td></tr>
       <tr><th>FAX</th><td>052-388-7758</td></tr>
       <tr><th>メールアドレス</th><td>info@exdirect.net</td></tr>
