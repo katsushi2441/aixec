@@ -695,5 +695,6 @@ function showToast(msg) {
 </script>
 <?php endif; ?>
 <div id="copy-toast">コピーしました</div>
+  <script defer src="https://kurage.exbridge.jp/js/oss-banners.js?v=20260822" data-ref="oss-lp-aixec"></script>
 </body>
 </html>
