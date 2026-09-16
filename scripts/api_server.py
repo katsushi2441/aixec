@@ -606,7 +606,7 @@ def _load_market_pipeline_result():
     return data
 
 OLLAMA_SERVERS = [
-    {"name": "main",  "url": "https://exbridge.ddns.net/api/tags"},
+    {"name": "main",  "url": "http://192.168.0.14:11434/api/tags"},
     {"name": "sub",   "url": "http://192.168.0.3:11434/api/tags"},
     {"name": "sub2",  "url": "http://192.168.0.11:11434/api/tags"},
 ]
