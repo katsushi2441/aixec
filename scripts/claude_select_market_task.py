@@ -8,10 +8,30 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CLAUDE_BIN = os.environ.get(
-    "CLAUDE_BIN",
-    "/home/kojima/.vscode-server/extensions/anthropic.claude-code-2.1.145-linux-x64/resources/native-binary/claude",
-)
+def _resolve_claude_bin(preset: str = "") -> str:
+    """claude の実体を探す。
+
+    VS Code 拡張のパスはバージョンを含むので、更新されると固定パスは消える。
+    2026-09-09 に 2.1.145/2.1.169 が消えて、これを固定で持っていた処理が
+    軒並み動かなくなった。固定で書かず、新しいものから順に拾う。
+    """
+    import glob as _glob
+    import shutil as _shutil
+    candidates = [preset] if preset else []
+    found = _shutil.which("claude")
+    if found:
+        candidates.append(found)
+    candidates.append("/home/kojima/.local/bin/claude")
+    candidates.extend(sorted(_glob.glob(
+        "/home/kojima/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude"),
+        reverse=True))
+    for path in candidates:
+        if path and os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+    return ""
+
+
+CLAUDE_BIN = _resolve_claude_bin(os.environ.get("CLAUDE_BIN", ""))
 SKILL = ROOT / "skills" / "aixec-product-registration" / "SKILL.md"
 CONTEXT = ROOT / "tasks" / "marketing_context.md"
 SCHEMA = ROOT / "tasks" / "task.schema.json"
