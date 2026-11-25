@@ -983,6 +983,9 @@ class PayloadTooLarge(Exception):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AIxEC/0.2'
+    # 2026-11-26: 受信・送信が止まった接続を60秒で切る。無いと heteml 側が諦めた接続がスレッドごと残り（222本・CLOSE-WAIT 80）、
+    # 17.8GB まで膨らんで MemoryHigh で固まり、AIxSNS が全部止まった。
+    timeout = 60
 
     def log_message(self, fmt, *args):
         request_line = args[0] if args else ''
