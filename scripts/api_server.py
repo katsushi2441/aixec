@@ -974,6 +974,13 @@ def search_rakuten_items(keyword, hits=10, sort='standard'):
     }
 
 
+MAX_BODY_BYTES = int(os.environ.get('AIXEC_MAX_BODY_BYTES') or 20 * 1024 * 1024)
+
+
+class PayloadTooLarge(Exception):
+    pass
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'AIxEC/0.2'
 
@@ -1009,6 +1016,10 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length') or 0)
         if length <= 0:
             return {}
+        if length > MAX_BODY_BYTES:
+            # 2026-11-25: 本文を大きさの上限なしで読んでいた。外部スキャンの直後に API が 60GB まで膨らみ 0.14 全体が止まった。
+            self.close_connection = True
+            raise PayloadTooLarge(f'body too large: {length} > {MAX_BODY_BYTES}')
         raw = self.rfile.read(length).decode('utf-8')
         return json.loads(raw)
 
@@ -2031,6 +2042,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': True, 'job': row_dict(row)}, 202)
                 return
             self.send_json({'ok': False, 'error': 'not found'}, 404)
+        except PayloadTooLarge as exc:
+            self.send_json({'ok': False, 'error': str(exc)}, 413)
         except json.JSONDecodeError:
             self.send_json({'ok': False, 'error': 'invalid json'}, 400)
         except Exception as exc:
